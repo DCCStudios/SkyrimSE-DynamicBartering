@@ -1,0 +1,34 @@
+# Build output
+build/
+out/
+cmake-build-*/
+
+# Compiled / binary artifacts
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.obj
+
+# vcpkg
+vcpkg_installed/
+
+# Logs & crash dumps
+*.log
+hs_err_pid*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE / editor
+.vs/
+.vscode/
+.idea/
+*.user
+
+# OS cruft
+Thumbs.db
+desktop.ini
+.DS_Store

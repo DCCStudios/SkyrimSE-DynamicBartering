@@ -1,0 +1,17 @@
+set(sources
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Settings.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Hooks.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/BarterManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/PriceCalculator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/RelationshipManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MerchantPersonality.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/DealMemory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/CounterOffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/PerkDetector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/PriceJack.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/UI/UIBridge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/UI/ScaleformUI.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/UI/PrismaUI.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Menu/ConfigMenu.cpp
+)

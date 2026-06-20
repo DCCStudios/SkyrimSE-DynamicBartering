@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Bartering</title>
+    <link rel="stylesheet" href="barter_offer.css">
+</head>
+<body>
+    <div id="barter-overlay" class="hidden">
+        <div id="barter-panel">
+            <div class="panel-header">
+                <div class="merchant-info">
+                    <span id="merchant-name" class="merchant-name"></span>
+                    <span id="merchant-personality" class="personality-badge"></span>
+                </div>
+                <div class="relationship-display">
+                    <span class="rel-label">Standing:</span>
+                    <span id="relationship-value" class="rel-value"></span>
+                    <span id="relationship-text" class="rel-text"></span>
+                </div>
+                <img src="icons/ornament_divider.png" class="ornament-divider" alt="">
+            </div>
+
+            <div class="panel-body">
+                <div class="item-info">
+                    <span class="item-label">Item:</span>
+                    <span id="item-name" class="item-name"></span>
+                </div>
+
+                <div class="price-display">
+                    <div class="price-row">
+                        <span class="price-label">Market Price:</span>
+                        <span class="price-value-group">
+                            <img src="icons/gold_coin.png" class="gold-coin-icon" alt="">
+                            <span id="base-price" class="price-value gold"></span>
+                        </span>
+                    </div>
+                    <div class="price-row">
+                        <span class="price-label">Your Offer:</span>
+                        <span class="price-value-group">
+                            <img src="icons/gold_coin.png" class="gold-coin-icon" alt="">
+                            <span id="offer-price" class="price-value offer"></span>
+                        </span>
+                    </div>
+                </div>
+
+                <div class="slider-container">
+                    <div class="slider-labels">
+                        <span id="slider-min-label" class="slider-bound"></span>
+                        <span id="slider-max-label" class="slider-bound"></span>
+                    </div>
+                    <div class="slider-row">
+                        <img src="icons/arrow_left.png" class="slider-arrow" alt="&lt;">
+                        <input type="range" id="offer-slider" min="-30" max="30" value="0" step="1">
+                        <img src="icons/arrow_right.png" class="slider-arrow" alt="&gt;">
+                    </div>
+                    <div id="slider-percentage" class="slider-pct">0%</div>
+                </div>
+
+                <div class="acceptance-bar-container">
+                    <span class="accept-label">Acceptance:</span>
+                    <div class="acceptance-bar">
+                        <div id="acceptance-fill" class="acceptance-fill"></div>
+                    </div>
+                    <span id="acceptance-text" class="acceptance-text"></span>
+                </div>
+
+                <div id="price-jack-warning" class="price-jack-warning hidden"></div>
+
+                <div id="deal-history" class="deal-history hidden">
+                    <span class="history-title">Recent Deals:</span>
+                    <ul id="history-list"></ul>
+                </div>
+            </div>
+
+            <div id="counter-offer-panel" class="counter-panel hidden">
+                <div class="counter-header">Merchant's Counter-Offer</div>
+                <div class="counter-amount">
+                    <span id="counter-price" class="counter-price"></span>
+                    <span class="gold-icon">gold</span>
+                </div>
+                <div class="patience-display">
+                    <span>Patience:</span>
+                    <span id="patience-dots" class="patience-dots"></span>
+                </div>
+                <div class="counter-buttons">
+                    <button id="btn-accept-counter" class="btn btn-accept">Accept</button>
+                    <button id="btn-reoffer" class="btn btn-neutral">Re-offer</button>
+                    <button id="btn-walkaway" class="btn btn-reject">Walk Away</button>
+                </div>
+            </div>
+
+            <div id="result-overlay" class="result-overlay hidden">
+                <div id="result-text" class="result-text"></div>
+                <div id="result-delta" class="result-delta"></div>
+            </div>
+
+            <div class="panel-footer">
+                <div class="controls">
+                    <button id="btn-offer" class="btn btn-primary">[E] Make Offer</button>
+                    <button id="btn-intimidate" class="btn btn-danger hidden">[I] Intimidate</button>
+                    <button id="btn-cancel" class="btn btn-secondary">[Tab] Cancel</button>
+                </div>
+                <div class="perk-info">
+                    <span id="perk-summary" class="perk-text"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="barter_offer.js"></script>
+</body>
+</html>
