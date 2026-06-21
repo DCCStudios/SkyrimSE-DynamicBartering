@@ -30,6 +30,12 @@ struct AcceptanceContext {
     int basePrice = 0;
     bool oppositeGender = false;
     bool isStolen = false;
+    // true = player is buying (paying more is generous), false = selling (asking
+    // less is generous). Drives which slider direction the merchant likes.
+    bool isBuying = true;
+    // Highest price already refused this session for this item (0 = none). If the
+    // current offer is at or below this, the merchant is much less willing.
+    int sessionRejectedPrice = 0;
 };
 
 class PriceCalculator {

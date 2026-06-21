@@ -349,6 +349,10 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
     padding: 8px 16px;
     border: 1px solid rgba(180, 150, 80, 0.5);
     border-radius: 3px;
@@ -359,6 +363,28 @@ input[type="range"]::-webkit-slider-thumb {
     letter-spacing: 1px;
     transition: all 0.15s ease;
 }
+
+.btn-glyph {
+    height: 1.5em;
+    width: auto;
+    vertical-align: middle;
+    image-rendering: auto;
+    pointer-events: none;
+}
+
+.adjust-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 4px;
+    color: #8a7c68;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.adjust-hint .btn-glyph { height: 1.4em; }
 
 .btn:hover {
     transform: translateY(-1px);

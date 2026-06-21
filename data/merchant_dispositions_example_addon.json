@@ -1,0 +1,14 @@
+{
+  "_meta": {
+    "version": 1,
+    "mod": "Example Merchant Addon",
+    "author": "Your Name",
+    "description": "Example disposition file for custom merchants. Place in Data/SKSE/Plugins/DynamicBartering/Dispositions/ and it will be loaded additively at startup.",
+    "personalities": ["fair", "generous", "greedy", "sleazy", "stern", "timid"],
+    "notes": "Entries here will override the default disposition if the merchant name matches. Names must match the NPC's base name exactly (case-insensitive matching is applied)."
+  },
+  "merchants": {
+    "My Custom Merchant": { "personality": "greedy", "note": "A custom merchant added by my mod." },
+    "Friendly Trader": { "personality": "generous", "note": "Override example: this overrides any default entry." }
+  }
+}

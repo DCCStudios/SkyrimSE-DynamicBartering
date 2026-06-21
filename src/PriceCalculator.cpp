@@ -29,8 +29,22 @@ float PriceCalculator::CalculateAcceptanceChance(const AcceptanceContext& ctx) {
     if (settings->forceAccept) return 100.0f;
     if (settings->forceReject) return 0.0f;
 
-    // Offering at or above market price is almost always accepted
-    if (ctx.basePrice > 0 && ctx.offeredPrice >= ctx.basePrice) {
+    // "greed" = how much more favorable to the player than market the offer is,
+    // as a fraction of market. Direction depends on buy vs sell:
+    //   buying  -> player wants to pay LESS    -> greed = (base - offered)/base
+    //   selling -> player wants to receive MORE -> greed = (offered - base)/base
+    // greed <= 0 means the offer is at least as good for the merchant as market,
+    // which the merchant almost always takes.
+    float greed = 0.0f;
+    if (ctx.basePrice > 0) {
+        if (ctx.isBuying) {
+            greed = 1.0f - (static_cast<float>(ctx.offeredPrice) / static_cast<float>(ctx.basePrice));
+        } else {
+            greed = (static_cast<float>(ctx.offeredPrice) / static_cast<float>(ctx.basePrice)) - 1.0f;
+        }
+    }
+
+    if (ctx.basePrice > 0 && greed <= 0.0f) {
         return 99.0f;
     }
 
@@ -59,18 +73,10 @@ float PriceCalculator::CalculateAcceptanceChance(const AcceptanceContext& ctx) {
         chance -= std::min(static_cast<float>(recentLowballs) * 3.0f, 15.0f);
     }
 
-    // Discount penalty (greed)
-    float discount = 0.0f;
-    if (ctx.basePrice > 0) {
-        discount = 1.0f - (static_cast<float>(ctx.offeredPrice) / static_cast<float>(ctx.basePrice));
-    }
-    if (discount > 0.0f) {
-        chance -= discount * 100.0f * settings->greedFactor;
-    }
-
-    // Bonus for offering more than base price
-    if (discount < 0.0f) {
-        chance += std::abs(discount) * 50.0f;
+    // Greed penalty: the further the offer is in the player's favour, the less
+    // likely the merchant accepts. (greed <= 0 already returned 99 above.)
+    if (greed > 0.0f) {
+        chance -= greed * 100.0f * settings->greedFactor;
     }
 
     // Stolen item penalty
@@ -80,6 +86,18 @@ float PriceCalculator::CalculateAcceptanceChance(const AcceptanceContext& ctx) {
             penalty *= (1.0f - settings->fencePerkReduction / 100.0f);
         }
         chance -= penalty;
+    }
+
+    // Session memory: the merchant already refused this price for this item, so
+    // re-offering something no better (for the merchant) is far less likely to
+    // land. When buying that means offering the same or LESS; when selling it
+    // means asking the same or MORE.
+    if (ctx.sessionRejectedPrice > 0) {
+        bool noBetter = ctx.isBuying ? (ctx.offeredPrice <= ctx.sessionRejectedPrice)
+                                     : (ctx.offeredPrice >= ctx.sessionRejectedPrice);
+        if (noBetter) {
+            chance = chance * 0.2f - 10.0f;
+        }
     }
 
     return std::clamp(chance, 0.0f, 99.0f);

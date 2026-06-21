@@ -17,6 +17,7 @@ void BarterManager::OnBarterOpen() {
     barterActive = true;
     currentMerchant = nullptr;
     currentMerchantID = 0;
+    sessionRejections.clear();
 
     auto* player = RE::PlayerCharacter::GetSingleton();
     if (!player) return;
@@ -60,10 +61,11 @@ void BarterManager::OnBarterClose() {
     currentMerchantID = 0;
     currentItem = nullptr;
     currentItemID = 0;
+    sessionRejections.clear();
     RelationshipManager::GetSingleton()->SaveData();
 }
 
-void BarterManager::StartOffer(RE::TESBoundObject* item, int baseValue, bool isBuying, bool isStolen) {
+void BarterManager::StartOffer(RE::TESBoundObject* item, int baseValue, bool isBuying, bool isStolen, int amount) {
     if (!currentMerchant || !item) return;
     auto* settings = Settings::GetSingleton();
     if (!settings->modEnabled) return;
@@ -73,6 +75,7 @@ void BarterManager::StartOffer(RE::TESBoundObject* item, int baseValue, bool isB
     currentItemID = item->GetFormID();
     currentIsBuying = isBuying;
     currentIsStolen = isStolen;
+    currentAmount = (amount >= 1) ? amount : 1;
 
     auto& memory = RelationshipManager::GetSingleton()->GetOrCreate(
         currentMerchantID, currentMerchant->GetName() ? currentMerchant->GetName() : "Unknown");
@@ -96,6 +99,11 @@ void BarterManager::StartOffer(RE::TESBoundObject* item, int baseValue, bool isB
     data.itemName = item->GetName() ? item->GetName() : "Unknown Item";
     data.basePrice = priceResult.basePrice;
     data.effectivePrice = priceResult.effectivePrice;
+    data.isBuying = isBuying;
+    {
+        auto it = sessionRejections.find(currentItemID);
+        data.sessionRejectedPrice = (it != sessionRejections.end()) ? it->second : 0;
+    }
     data.merchantName = currentMerchant->GetName() ? currentMerchant->GetName() : "Unknown";
     data.personalityName = MerchantPersonality::TraitToString(cachedPersonality.trait);
     data.relationship = memory.relationship;
@@ -121,30 +129,18 @@ void BarterManager::StartOffer(RE::TESBoundObject* item, int baseValue, bool isB
     }
     data.recentDealsJson = dealsJson.dump();
 
-    AcceptanceContext aCtx;
-    aCtx.speechSkill = cachedSpeech;
-    aCtx.perks = cachedPerks;
-    aCtx.relationship = memory.relationship;
-    aCtx.personality = cachedPersonality;
-    aCtx.memory = &memory;
-    aCtx.offeredPrice = priceResult.effectivePrice;
-    aCtx.basePrice = priceResult.effectivePrice;
-    aCtx.oppositeGender = false;
-    data.acceptanceChance = PriceCalculator::CalculateAcceptanceChance(aCtx);
+    // Initial displayed chance for the starting offer (= market price), using the
+    // exact same context the real decision will use, so the verdict is consistent.
+    data.acceptanceChance = PriceCalculator::CalculateAcceptanceChance(
+        BuildAcceptanceContext(priceResult.effectivePrice));
 
     state = BarterState::ShowingOffer;
     UIBridge::GetSingleton()->ShowOffer(data);
     state = BarterState::WaitingForPlayer;
 }
 
-void BarterManager::OnPlayerOffer(int offeredPrice) {
-    if (state != BarterState::WaitingForPlayer) return;
-
-    if (offeredPrice < 0) {
-        OnCancelled();
-        return;
-    }
-
+AcceptanceContext BarterManager::BuildAcceptanceContext(int offeredPrice) {
+    AcceptanceContext ctx;
     auto& memory = RelationshipManager::GetSingleton()->GetOrCreate(
         currentMerchantID, currentMerchant ? (currentMerchant->GetName() ? currentMerchant->GetName() : "Unknown") : "Unknown");
 
@@ -159,7 +155,6 @@ void BarterManager::OnPlayerOffer(int offeredPrice) {
         }
     }
 
-    AcceptanceContext ctx;
     ctx.speechSkill = cachedSpeech;
     ctx.perks = cachedPerks;
     ctx.relationship = memory.relationship;
@@ -169,8 +164,32 @@ void BarterManager::OnPlayerOffer(int offeredPrice) {
     ctx.basePrice = currentEffectivePrice;
     ctx.oppositeGender = oppositeGender;
     ctx.isStolen = currentIsStolen;
+    ctx.isBuying = currentIsBuying;
+    auto it = sessionRejections.find(currentItemID);
+    ctx.sessionRejectedPrice = (it != sessionRejections.end()) ? it->second : 0;
+    return ctx;
+}
 
-    float chance = PriceCalculator::CalculateAcceptanceChance(ctx);
+float BarterManager::PreviewAcceptanceChance(int offeredPrice) {
+    if (!currentMerchant) return 0.0f;
+    return PriceCalculator::CalculateAcceptanceChance(BuildAcceptanceContext(offeredPrice));
+}
+
+void BarterManager::RecordSessionRejection(int offeredPrice) {
+    if (currentItemID == 0 || offeredPrice <= 0) return;
+    auto& slot = sessionRejections[currentItemID];
+    if (offeredPrice > slot) slot = offeredPrice;
+}
+
+void BarterManager::OnPlayerOffer(int offeredPrice) {
+    if (state != BarterState::WaitingForPlayer) return;
+
+    if (offeredPrice < 0) {
+        OnCancelled();
+        return;
+    }
+
+    float chance = PreviewAcceptanceChance(offeredPrice);
 
     auto* settings = Settings::GetSingleton();
     if (settings->debugLogging) {
@@ -179,28 +198,63 @@ void BarterManager::OnPlayerOffer(int offeredPrice) {
 
     ResetDebugForceFlags();
 
-    if (PriceCalculator::RollAcceptance(chance)) {
+    // A displayed "Merchant will ACCEPT" (chance >= threshold) must never be
+    // rejected. At/above the guaranteed band we accept deterministically; below
+    // it we roll. Offering at/above market price returns 99 from the calculator,
+    // which is above the threshold, so above-market offers always go through.
+    bool accept = (chance >= kGuaranteedAcceptThreshold) || PriceCalculator::RollAcceptance(chance);
+
+    if (accept) {
         ProcessAcceptance(offeredPrice);
     } else {
+        RecordSessionRejection(offeredPrice);
         ProcessRejection(offeredPrice);
     }
 }
 
+int BarterManager::RollRelationshipChange(float chancePercent, int delta, const char* reason) {
+    if (delta == 0 || chancePercent <= 0.0f) return 0;
+    static std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> dist(0.0f, 100.0f);
+    if (dist(rng) < chancePercent) {
+        RelationshipManager::GetSingleton()->ModifyRelationship(currentMerchantID, delta);
+        if (Settings::GetSingleton()->debugLogging) {
+            logger::info("Relationship {}{} ({}) [{:.0f}% chance hit]",
+                delta > 0 ? "+" : "", delta, reason, chancePercent);
+        }
+        return delta;
+    }
+    if (Settings::GetSingleton()->debugLogging) {
+        logger::info("Relationship unchanged ({}) [{:.0f}% chance missed]", reason, chancePercent);
+    }
+    return 0;
+}
+
 void BarterManager::ProcessAcceptance(int offeredPrice) {
-    float ratio = (currentEffectivePrice > 0)
-        ? static_cast<float>(offeredPrice) / static_cast<float>(currentEffectivePrice)
-        : 1.0f;
+    // Generosity ratio toward the merchant (>1 = the player gave the merchant a
+    // better-than-market deal). Direction-aware: buying generously = paying more;
+    // selling generously = asking less.
+    float genRatio = 1.0f;
+    if (currentEffectivePrice > 0) {
+        genRatio = currentIsBuying
+            ? static_cast<float>(offeredPrice) / static_cast<float>(currentEffectivePrice)
+            : (offeredPrice > 0 ? static_cast<float>(currentEffectivePrice) / static_cast<float>(offeredPrice) : 2.0f);
+    }
 
-    int relDelta = 1;
-    if (ratio >= 1.0f) relDelta = 3;
-    else if (ratio >= 0.9f) relDelta = 2;
+    // Chance-based standing gain. Generosity is the most reliably appreciated;
+    // fair deals less so; deals struck in the player's favour only occasionally
+    // warm a merchant.
+    int relGain = 0;
+    if (genRatio >= 1.1f)       relGain = RollRelationshipChange(80.0f, 3, "generous deal");
+    else if (genRatio >= 1.0f)  relGain = RollRelationshipChange(65.0f, 2, "deal at/above market");
+    else if (genRatio >= 0.9f)  relGain = RollRelationshipChange(45.0f, 1, "fair deal");
+    else                        relGain = RollRelationshipChange(25.0f, 1, "deal in player's favour");
 
-    RelationshipManager::GetSingleton()->ModifyRelationship(currentMerchantID, relDelta);
     RecordAndClose(offeredPrice, true, false, 0);
     TransferItemAndGold(offeredPrice);
 
     // Show brief acceptance confirmation with amount, then auto-close
-    UIBridge::GetSingleton()->ShowResult(true, offeredPrice);
+    UIBridge::GetSingleton()->ShowResult(true, offeredPrice, relGain);
     state = BarterState::ShowingResult;
     logger::info("BarterManager: Offer accepted for {} gold - showing confirmation", offeredPrice);
 
@@ -213,6 +267,7 @@ void BarterManager::ProcessAcceptance(int offeredPrice) {
                     auto itemID = currentItemID;
                     UIBridge::GetSingleton()->Hide();
                     state = BarterState::Idle;
+                    Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
                     currentItem = nullptr;
                     currentItemID = 0;
                     Hooks::interceptingTransaction = false;
@@ -233,17 +288,25 @@ void BarterManager::ProcessRejection(int offeredPrice) {
         patienceRemaining
     );
 
-    float ratio = (currentEffectivePrice > 0)
-        ? static_cast<float>(offeredPrice) / static_cast<float>(currentEffectivePrice)
-        : 1.0f;
+    // Greed = how far the offer is in the player's favour vs market (direction-aware):
+    // buying -> wanting to pay much less; selling -> demanding much more.
+    float greed = 0.0f;
+    if (currentEffectivePrice > 0) {
+        greed = currentIsBuying
+            ? 1.0f - static_cast<float>(offeredPrice) / static_cast<float>(currentEffectivePrice)
+            : static_cast<float>(offeredPrice) / static_cast<float>(currentEffectivePrice) - 1.0f;
+    }
 
-    int relLoss = -2;
-    if (ratio < 0.5f) relLoss = -static_cast<int>(cachedPersonality.offensePerInsult);
-    else if (ratio < 0.7f) relLoss = -static_cast<int>(cachedPersonality.offensePerInsult * 0.5f);
-
-    if (cachedPersonality.enjoysHaggling) relLoss = 0;
-
-    RelationshipManager::GetSingleton()->ModifyRelationship(currentMerchantID, relLoss);
+    // Chance-based standing loss. A greedy rejected offer is the most likely to
+    // offend; merchants who enjoy haggling shrug it off entirely.
+    int appliedLoss = 0;
+    if (!cachedPersonality.enjoysHaggling) {
+        int insult = static_cast<int>(cachedPersonality.offensePerInsult);
+        if (insult < 2) insult = 2;
+        if (greed > 0.5f)       appliedLoss = RollRelationshipChange(60.0f, -insult, "rejected greedy offer");
+        else if (greed > 0.3f)  appliedLoss = RollRelationshipChange(40.0f, -std::max(1, insult / 2), "rejected steep offer");
+        else                    appliedLoss = RollRelationshipChange(20.0f, -2, "rejected offer");
+    }
 
     if (counterResult.willCounter && patienceRemaining > 0) {
         currentCounterAmount = counterResult.counterAmount;
@@ -251,7 +314,7 @@ void BarterManager::ProcessRejection(int offeredPrice) {
         state = BarterState::ShowingCounterOffer;
         UIBridge::GetSingleton()->ShowCounterOffer(counterResult.counterAmount, patienceRemaining);
     } else {
-        UIBridge::GetSingleton()->ShowResult(false, relLoss);
+        UIBridge::GetSingleton()->ShowResult(false, 0, appliedLoss);
         RecordAndClose(offeredPrice, false, false, 0);
         state = BarterState::ShowingResult;
     }
@@ -277,23 +340,73 @@ void BarterManager::OnCounterResponse(int response) {
 }
 
 void BarterManager::OnIntimidateAttempt() {
-    if (!cachedPerks.hasIntimidation) return;
+    // Base success chance from Speech skill (0-100 → 0.0-0.5 base)
+    float baseChance = cachedSpeech / 200.0f;
 
-    float roll = cachedSpeech / 100.0f * 2.0f;
+    // Perk bonus: Intimidation perk doubles the base and raises cap
+    if (cachedPerks.hasIntimidation) {
+        baseChance *= 2.0f;
+    }
+
+    // Player level bonus (higher level = more intimidating, +1% per 5 levels)
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    int playerLevel = player ? player->GetLevel() : 1;
+    baseChance += static_cast<float>(playerLevel) * 0.002f;
+
+    // Merchant personality modifier
+    switch (cachedPersonality.trait) {
+        case MerchantPersonality::Trait::Timid:
+            baseChance += 0.25f;  // timid merchants are easily intimidated
+            break;
+        case MerchantPersonality::Trait::Stern:
+            baseChance -= 0.20f;  // stern merchants resist intimidation
+            break;
+        case MerchantPersonality::Trait::Greedy:
+            baseChance -= 0.10f;  // greedy merchants are stubborn
+            break;
+        case MerchantPersonality::Trait::Sleazy:
+            baseChance += 0.05f;  // sleazy merchants fold under real pressure
+            break;
+        case MerchantPersonality::Trait::Generous:
+            baseChance += 0.10f;  // generous merchants don't want confrontation
+            break;
+        default:
+            break;
+    }
+
+    // Clamp to [5%, 95%]
+    float roll = std::clamp(baseChance, 0.05f, 0.95f);
+
+    // Relationship penalty on failure scales with merchant personality
+    int failPenalty;
+    if (cachedPerks.hasIntimidation) {
+        failPenalty = -10;  // the perk helps soften the blow
+    } else {
+        failPenalty = -20;
+    }
+    // Stern merchants are extra offended by intimidation attempts
+    if (cachedPersonality.trait == MerchantPersonality::Trait::Stern) {
+        failPenalty -= 10;
+    }
+
     static std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+    logger::info("BarterManager: Intimidate attempt - chance={:.0f}%, speech={}, level={}, perk={}, personality={}",
+        roll * 100.0f, cachedSpeech, playerLevel, cachedPerks.hasIntimidation,
+        MerchantPersonality::TraitToString(cachedPersonality.trait));
 
     if (dist(rng) < roll) {
         int intimidatedPrice = currentIsBuying
             ? static_cast<int>(currentEffectivePrice * 0.5f)
             : static_cast<int>(currentEffectivePrice * 1.5f);
-        RelationshipManager::GetSingleton()->ModifyRelationship(currentMerchantID, -15);
+        RollRelationshipChange(85.0f, -15, "intimidation succeeded");
         RecordAndClose(intimidatedPrice, true, false, 0);
         TransferItemAndGold(intimidatedPrice);
-        // Close immediately on successful intimidation
         auto itemID = currentItemID;
         UIBridge::GetSingleton()->Hide();
         state = BarterState::Idle;
+        Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
         currentItem = nullptr;
         currentItemID = 0;
         Hooks::interceptingTransaction = false;
@@ -301,8 +414,8 @@ void BarterManager::OnIntimidateAttempt() {
         RefreshBarterMenu(itemID);
         logger::info("BarterManager: Intimidation succeeded - deal done, window closed");
     } else {
-        RelationshipManager::GetSingleton()->ModifyRelationship(currentMerchantID, -25);
-        UIBridge::GetSingleton()->ShowResult(false, -25);
+        int loss = RollRelationshipChange(95.0f, failPenalty, "intimidation failed");
+        UIBridge::GetSingleton()->ShowResult(false, 0, loss);
         state = BarterState::ShowingResult;
     }
 }
@@ -310,6 +423,7 @@ void BarterManager::OnIntimidateAttempt() {
 void BarterManager::OnResultDismissed() {
     UIBridge::GetSingleton()->Hide();
     state = BarterState::Idle;
+    Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
     currentItem = nullptr;
     currentItemID = 0;
     Hooks::interceptingTransaction = false;
@@ -325,6 +439,7 @@ void BarterManager::OnCancelled() {
     logger::info("BarterManager: Offer cancelled by player");
     UIBridge::GetSingleton()->Hide();
     state = BarterState::Idle;
+    Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
     currentItem = nullptr;
     currentItemID = 0;
     Hooks::interceptingTransaction = false;
@@ -332,12 +447,13 @@ void BarterManager::OnCancelled() {
 }
 
 void BarterManager::FinalizeDeal(int finalPrice, bool wasCounter) {
-    RelationshipManager::GetSingleton()->ModifyRelationship(currentMerchantID, 1);
+    // Settling on a counter is a completed deal: a modest chance to warm relations.
+    int relGain = RollRelationshipChange(50.0f, 1, "counter-offer accepted");
     RecordAndClose(finalPrice, true, wasCounter, wasCounter ? currentCounterAmount : 0);
     TransferItemAndGold(finalPrice);
 
     // Show acceptance result (hides the window), then auto-close
-    UIBridge::GetSingleton()->ShowResult(true, finalPrice);
+    UIBridge::GetSingleton()->ShowResult(true, finalPrice, relGain);
     state = BarterState::ShowingResult;
     logger::info("BarterManager: Counter-offer accepted for {} gold - showing confirmation", finalPrice);
 
@@ -350,6 +466,7 @@ void BarterManager::FinalizeDeal(int finalPrice, bool wasCounter) {
                     auto itemID = currentItemID;
                     UIBridge::GetSingleton()->Hide();
                     state = BarterState::Idle;
+                    Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
                     currentItem = nullptr;
                     currentItemID = 0;
                     Hooks::interceptingTransaction = false;
@@ -376,8 +493,9 @@ bool BarterManager::ValidateGoldBalance(int amount, bool playerPays) const {
 
 void BarterManager::TransferItemAndGold(int finalPrice) {
     bool isBuying = currentIsBuying;
+    int amount = (currentAmount >= 1) ? currentAmount : 1;
 
-    SKSE::GetTaskInterface()->AddUITask([finalPrice, isBuying]() {
+    SKSE::GetTaskInterface()->AddUITask([finalPrice, isBuying, amount]() {
         auto* ui = RE::UI::GetSingleton();
         if (!ui) {
             logger::error("TransferItemAndGold: UI singleton null");
@@ -406,20 +524,47 @@ void BarterManager::TransferItemAndGold(int finalPrice) {
         Hooks::interceptingTransaction = false;
         Hooks::lastSelectedItem = nullptr;
 
-        // Directly invoke the "ItemSelect" GameDelegate callback with our custom price.
-        // AS2 GameDelegate.call() prepends [methodName, responseID] then strips them, so the
-        // native handler's args are [responseID, amount, unitPrice, isViewingVendorItems].
-        // CommonLib's FxDelegateArgs consumes args[0] as the responseID and exposes args[1..].
+        // The native ItemSelect handler reads the per-unit price from
+        // ItemCard_mc.itemInfo.value (NOT from our callback argument). We must
+        // patch the ItemCard's value to our negotiated per-unit price before
+        // invoking, or the engine uses the original market price for the gold
+        // exchange (explains why underpaying works — same direction as vanilla's
+        // rounding — but overpaying doesn't take the extra gold).
+        double unitPrice = static_cast<double>(finalPrice) / static_cast<double>(amount);
+
+        RE::GFxValue itemCardInfo;
+        if (movie->GetVariable(&itemCardInfo, "_root.Menu_mc.ItemCard_mc.itemInfo")) {
+            if (itemCardInfo.IsObject()) {
+                RE::GFxValue pv;
+                pv.SetNumber(unitPrice);
+                itemCardInfo.SetMember("value", pv);
+                logger::info("TransferItemAndGold: Set ItemCard_mc.itemInfo.value = {:.2f}", unitPrice);
+            }
+        }
+        // Also try the flat path some SWF layouts use:
+        RE::GFxValue itemCardInfo2;
+        if (movie->GetVariable(&itemCardInfo2, "_root.ItemCard_mc.itemInfo")) {
+            if (itemCardInfo2.IsObject()) {
+                RE::GFxValue pv;
+                pv.SetNumber(unitPrice);
+                itemCardInfo2.SetMember("value", pv);
+            }
+        }
+
         RE::GFxValue args[4];
         args[0].SetNumber(0.0);                                   // responseID (no response callback registered)
-        args[1].SetNumber(1.0);                                   // count
-        args[2].SetNumber(static_cast<double>(finalPrice));       // unit price (our negotiated price)
+        args[1].SetNumber(static_cast<double>(amount));           // count (stack quantity)
+        args[2].SetNumber(unitPrice);                             // per-unit negotiated price
         args[3].SetBoolean(isBuying);                             // IsViewingVendorItems
 
+        // Our interceptor now owns "ItemSelect"; flag the replay so it forwards to the
+        // captured vanilla handler instead of re-opening the negotiation window.
+        Hooks::replayingItemSelect = true;
         delegate->Callback(movie, "ItemSelect", args, 4);
+        Hooks::replayingItemSelect = false;
 
-        logger::info("TransferItemAndGold: Invoked ItemSelect callback (price={}, {})",
-            finalPrice, isBuying ? "buying" : "selling");
+        logger::info("TransferItemAndGold: Invoked ItemSelect callback (total={}, x{}, unit={:.2f}, {})",
+            finalPrice, amount, unitPrice, isBuying ? "buying" : "selling");
     });
 }
 
@@ -432,6 +577,7 @@ void BarterManager::RefreshBarterMenu(RE::FormID itemID) {
 
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* item = itemID ? RE::TESForm::LookupByID<RE::TESBoundObject>(itemID) : nullptr;
+        auto* gold = RE::TESForm::LookupByID<RE::TESBoundObject>(0x0000000F);
 
         // Resolve the merchant reference from the BarterMenu's target handle
         RE::TESObjectREFR* merchantRef = nullptr;
@@ -441,12 +587,17 @@ void BarterManager::RefreshBarterMenu(RE::FormID itemID) {
             merchantRef = refPtr.get();
         }
 
-        // Refresh both sides of the barter so item lists and gold totals update live
+        // Backstop refresh for both sides of the barter so the item lists AND the
+        // player/vendor gold totals update live even if the engine's own post-
+        // transaction inventory update was missed. Sending the gold object as well
+        // forces the BarterMenu to recompute the bottom-bar gold counters.
         if (player) {
             RE::SendUIMessage::SendInventoryUpdateMessage(player, item);
+            if (gold) RE::SendUIMessage::SendInventoryUpdateMessage(player, gold);
         }
         if (merchantRef) {
             RE::SendUIMessage::SendInventoryUpdateMessage(merchantRef, item);
+            if (gold) RE::SendUIMessage::SendInventoryUpdateMessage(merchantRef, gold);
         }
 
         logger::info("RefreshBarterMenu: Sent inventory update messages");

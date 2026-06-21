@@ -42,7 +42,7 @@ public:
     bool Initialize() override;
     void ShowOffer(const OfferData& data) override;
     void ShowCounterOffer(int counterAmount, int patience) override;
-    void ShowResult(bool accepted, int relDelta) override;
+    void ShowResult(bool accepted, int goldAmount, int relDelta) override;
     void Hide() override;
     bool IsAvailable() const override;
 

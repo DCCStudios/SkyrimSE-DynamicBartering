@@ -5,6 +5,32 @@
     let currentOffer = 0;
     let state = 'idle'; // idle, offering, counter, result
 
+    // Keybind glyph icons (controller + keyboard). Updated from C++ per offer.
+    const inputStyle = { gamepad: false, brand: 'xbox' };
+    const GLYPH_MAP = {
+        keyboard: { accept: 'glyph_key_e', cancel: 'glyph_key_tab', reoffer: 'glyph_key_r', adjust: 'glyph_key_arrows' },
+        xbox:     { accept: 'glyph_xbox_a', cancel: 'glyph_xbox_b', reoffer: 'glyph_xbox_x', adjust: 'glyph_dpad' },
+        ps:       { accept: 'glyph_ps_cross', cancel: 'glyph_ps_circle', reoffer: 'glyph_ps_square', adjust: 'glyph_dpad' }
+    };
+
+    function glyphImg(action) {
+        const set = !inputStyle.gamepad ? GLYPH_MAP.keyboard
+            : (inputStyle.brand === 'ps' ? GLYPH_MAP.ps : GLYPH_MAP.xbox);
+        const file = set[action];
+        if (!file) return '';
+        return '<img class="btn-glyph" src="icons/glyphs/' + file + '.png" alt="">';
+    }
+
+    function applyGlyphs() {
+        if (elements.btnOffer) elements.btnOffer.innerHTML = glyphImg('accept') + '<span class="btn-label">Make Offer</span>';
+        if (elements.btnCancel) elements.btnCancel.innerHTML = glyphImg('cancel') + '<span class="btn-label">Cancel</span>';
+        if (elements.btnIntimidate) elements.btnIntimidate.innerHTML = '<span class="btn-label">Intimidate</span>';
+        if (elements.btnAcceptCounter) elements.btnAcceptCounter.innerHTML = glyphImg('accept') + '<span class="btn-label">Accept</span>';
+        if (elements.btnReoffer) elements.btnReoffer.innerHTML = glyphImg('reoffer') + '<span class="btn-label">Re-offer</span>';
+        if (elements.btnWalkaway) elements.btnWalkaway.innerHTML = glyphImg('cancel') + '<span class="btn-label">Walk Away</span>';
+        if (elements.adjustHint) elements.adjustHint.innerHTML = glyphImg('adjust') + '<span class="hint-label">Adjust</span>';
+    }
+
     const elements = {};
     function $(id) { return document.getElementById(id); }
 
@@ -39,6 +65,9 @@
         elements.btnReoffer = $('btn-reoffer');
         elements.btnWalkaway = $('btn-walkaway');
         elements.perkSummary = $('perk-summary');
+        elements.adjustHint = $('adjust-hint');
+
+        applyGlyphs();
 
         elements.slider.addEventListener('input', onSliderChange);
         elements.btnOffer.addEventListener('click', onMakeOffer);
@@ -150,6 +179,10 @@
         let data = JSON.parse(jsonStr);
         currentData = data;
         state = 'offering';
+
+        inputStyle.gamepad = !!data.gamepad;
+        inputStyle.brand = data.iconStyle || 'xbox';
+        applyGlyphs();
 
         elements.merchantName.textContent = data.merchantName;
         elements.personality.textContent = data.personality;

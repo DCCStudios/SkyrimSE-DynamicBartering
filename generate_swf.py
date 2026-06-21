@@ -111,6 +111,31 @@ CHAR_BMP_CORNER_BL = 94
 CHAR_BMP_CORNER_BR = 95
 CHAR_DEAL_HISTORY_TEXT = 96
 
+# Relationship meter extras (IDs >= 150 to stay clear of the dynamically-assigned
+# keybind glyph IDs which start at 100).
+CHAR_REL_BAR_FILL_RED = 150   # hostile (red) fill
+CHAR_REL_BAR_FILL_GRN = 151   # friendly (green) fill
+CHAR_REL_MARKER = 152         # moving diamond/tick marker
+CHAR_COIN_SPRITE = 153        # coin MovieClip placed as "coinIcon"; C++ moves its _x
+# Keybind hint labels (placed glyph shapes + these text fields form the hint row).
+CHAR_HINT_LBL_1 = 154
+CHAR_HINT_LBL_2 = 155
+CHAR_HINT_LBL_3 = 156
+CHAR_HINT_LBL_4 = 157
+# Relationship meter parts wrapped in MovieClips so _x/_xscale/_visible animate
+# reliably (bare shapes don't honor these in this GFx build, like the slider handle).
+CHAR_REL_BAR_FILL_MC = 157
+CHAR_REL_BAR_FILL_RED_MC = 158
+CHAR_REL_BAR_FILL_GRN_MC = 159
+CHAR_REL_MARKER_MC = 160
+# Relationship meter colored zones (hostile red -> neutral -> friendly green) drawn
+# as the bar's inner background so the marker's position carries clear meaning.
+CHAR_REL_ZONE_0 = 161
+CHAR_REL_ZONE_1 = 162
+CHAR_REL_ZONE_2 = 163
+CHAR_REL_ZONE_3 = 164
+CHAR_REL_ZONE_4 = 165
+
 FONT_MEDIUM_ID = 50
 FONT_BOLD_ID = 51
 
@@ -709,6 +734,21 @@ def make_define_sprite(char_id, tags_data):
     return make_tag(39, bytes(data))
 
 
+def make_export_assets(items):
+    """ExportAssets (tag 56) - assign linkage names to characters.
+
+    This is the AS2 'export for ActionScript' mechanism; it lets htmlText
+    reference a MovieClip inline via <img src='linkageName'/>.
+    items: list of (char_id, name) tuples.
+    """
+    data = bytearray()
+    data += struct.pack('<H', len(items))
+    for char_id, name in items:
+        data += struct.pack('<H', char_id)
+        data += name.encode('ascii') + b'\x00'
+    return make_tag(56, bytes(data))
+
+
 def make_place_object2(char_id, depth, x=0, y=0, name=""):
     """PlaceObject2 tag (tag type 26)."""
     data = bytearray()
@@ -770,15 +810,15 @@ def make_place_object2_hidden(char_id, depth, x=0, y=0, name=""):
     bw.write_sb(ty, nbits)
     data += bw.flush()
 
-    # CxFormWithAlpha: multiply alpha by 0
+    # CxFormWithAlpha: multiply alpha by 0 (hidden), keep RGB at 1.0 (=256 in 8.8 fixed)
     cxbw = BitWriter()
     cxbw.write_ub(0, 1)  # HasAddTerms
     cxbw.write_ub(1, 1)  # HasMultTerms
-    cxbw.write_ub(9, 4)  # Nbits
-    cxbw.write_sb(256, 9)  # R mult
-    cxbw.write_sb(256, 9)  # G mult
-    cxbw.write_sb(256, 9)  # B mult
-    cxbw.write_sb(0, 9)    # A mult = 0 (hidden)
+    cxbw.write_ub(10, 4) # Nbits (10 needed: 256 overflows 9-bit signed [-256..255])
+    cxbw.write_sb(256, 10)  # R mult = 1.0
+    cxbw.write_sb(256, 10)  # G mult = 1.0
+    cxbw.write_sb(256, 10)  # B mult = 1.0
+    cxbw.write_sb(0, 10)    # A mult = 0 (hidden)
     data += cxbw.flush()
 
     if has_name:
@@ -804,6 +844,14 @@ def build_actionscript():
     bc = bytearray()
 
     bc += as2_stop()
+
+    # Enable GFx HTML extensions. WITHOUT this, Scaleform ignores inline <img>
+    # tags in htmlText, so keybind glyphs never render. Vanilla Skyrim menus set
+    # this in frame-1 (see decompiled InventoryScrollingList / FocusHandler).
+    # SetVariable order matches the rest of this builder: push NAME then VALUE.
+    bc += as2_push_string("_global.gfxExtensions")
+    bc += as2_push_bool(True)
+    bc += as2_set_variable()
 
     # --- State variables ---
     bc += as2_push_string("state")
@@ -1842,13 +1890,13 @@ def build_swf():
     tags += make_define_shape_bitmap(CHAR_BMP_ARROW_RIGHT_SHAPE, CHAR_BMP_ARROW_RIGHT, 128, 128, display_w=14, display_h=14)
 
     # Button icon shapes (64x64 rendered at 16x16 display)
-    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_SUBMIT, CHAR_BTN_ICON_BMP_SUBMIT, 64, 64, display_w=16, display_h=16)
-    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_INTIMIDATE, CHAR_BTN_ICON_BMP_INTIMIDATE, 64, 64, display_w=16, display_h=16)
-    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_CANCEL, CHAR_BTN_ICON_BMP_CANCEL, 64, 64, display_w=16, display_h=16)
-    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_ACCEPT, CHAR_BTN_ICON_BMP_ACCEPT, 64, 64, display_w=16, display_h=16)
-    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_REOFFER, CHAR_BTN_ICON_BMP_REOFFER, 64, 64, display_w=16, display_h=16)
-    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_WALKAWAY, CHAR_BTN_ICON_BMP_WALKAWAY, 64, 64, display_w=16, display_h=16)
-    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_CONTINUE, CHAR_BTN_ICON_BMP_CONTINUE, 64, 64, display_w=16, display_h=16)
+    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_SUBMIT, CHAR_BTN_ICON_BMP_SUBMIT, 64, 64, display_w=22, display_h=22)
+    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_INTIMIDATE, CHAR_BTN_ICON_BMP_INTIMIDATE, 64, 64, display_w=22, display_h=22)
+    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_CANCEL, CHAR_BTN_ICON_BMP_CANCEL, 64, 64, display_w=22, display_h=22)
+    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_ACCEPT, CHAR_BTN_ICON_BMP_ACCEPT, 64, 64, display_w=22, display_h=22)
+    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_REOFFER, CHAR_BTN_ICON_BMP_REOFFER, 64, 64, display_w=22, display_h=22)
+    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_WALKAWAY, CHAR_BTN_ICON_BMP_WALKAWAY, 64, 64, display_w=22, display_h=22)
+    tags += make_define_shape_bitmap(CHAR_BTN_ICON_SHAPE_CONTINUE, CHAR_BTN_ICON_BMP_CONTINUE, 64, 64, display_w=22, display_h=22)
 
     # --- Panel background (near-black) ---
     panel_w = 340
@@ -1911,40 +1959,49 @@ def build_swf():
     slider_inner += make_end_tag()
     tags += make_define_sprite(CHAR_SLIDER_MC, bytes(slider_inner))
 
-    # --- Button shapes ---
-    btn_w = 80
-    btn_h = 24
-    tags += make_define_shape(
-        char_id=CHAR_BTN_BG_NORMAL,
-        fill_color=(80, 70, 55, 250),
-        bounds=(0, btn_w, 0, btn_h),
-        line_color=(200, 180, 120, 250),
-        line_width=30,
-    )
-    tags += make_define_shape(
-        char_id=CHAR_BTN_BG_HIGHLIGHT,
-        fill_color=(50, 44, 24, 250),
-        bounds=(0, btn_w, 0, btn_h),
-        line_color=(218, 165, 32, 255),
-        line_width=20,
-    )
+    # --- Per-button bitmap backgrounds (individual color-coded borders) ---
+    btn_w = 100
+    btn_h = 28
+    btn_bg_dir = os.path.join(os.path.dirname(__file__), "assets", "icons", "buttons")
+    btn_names_ordered = ['submit', 'intimidate', 'cancel', 'accept', 'reoffer', 'walkaway', 'continue']
 
-    # Wrap button bg shapes in MovieClips for AS accessibility
-    norm_wrap = bytearray()
-    norm_wrap += make_place_object2(CHAR_BTN_BG_NORMAL, 1, 0, 0)
-    norm_wrap += make_show_frame()
-    norm_wrap += make_end_tag()
-    tags += make_define_sprite(CHAR_BTN_BG_NORMAL_MC, bytes(norm_wrap))
+    # Bitmap IDs 200-213 for normal/highlight backgrounds (2 per button × 7 buttons)
+    btn_bg_bmp_base = 200
+    # Shape IDs for bitmap-backed shapes: reuse CHAR_BTN_BG_NORMAL (16) and CHAR_BTN_BG_HIGHLIGHT (17)
+    # as the first pair, then use 210+ for the rest — actually we need unique shapes per button.
+    # We'll use IDs 220-233 for per-button bg shapes (normal + highlight interleaved)
+    btn_bg_shape_base = 220
+    # Sprites wrapping each shape: IDs 240-253
+    btn_bg_sprite_base = 240
 
-    hl_wrap = bytearray()
-    hl_wrap += make_place_object2(CHAR_BTN_BG_HIGHLIGHT, 1, 0, 0)
-    hl_wrap += make_show_frame()
-    hl_wrap += make_end_tag()
-    tags += make_define_sprite(CHAR_BTN_BG_HIGHLIGHT_MC, bytes(hl_wrap))
+    for idx, bname in enumerate(btn_names_ordered):
+        norm_path = os.path.join(btn_bg_dir, f"bg_{bname}_normal.png")
+        hl_path = os.path.join(btn_bg_dir, f"bg_{bname}_highlight.png")
+        bmp_id_n = btn_bg_bmp_base + idx * 2
+        bmp_id_h = btn_bg_bmp_base + idx * 2 + 1
+        shp_id_n = btn_bg_shape_base + idx * 2
+        shp_id_h = btn_bg_shape_base + idx * 2 + 1
+        spr_id_n = btn_bg_sprite_base + idx * 2
+        spr_id_h = btn_bg_sprite_base + idx * 2 + 1
+
+        tags += make_define_bits_lossless2(bmp_id_n, norm_path)
+        tags += make_define_shape_bitmap(shp_id_n, bmp_id_n, 400, 112, display_w=btn_w, display_h=btn_h)
+        norm_wrap = bytearray()
+        norm_wrap += make_place_object2(shp_id_n, 1, 0, 0)
+        norm_wrap += make_show_frame()
+        norm_wrap += make_end_tag()
+        tags += make_define_sprite(spr_id_n, bytes(norm_wrap))
+
+        tags += make_define_bits_lossless2(bmp_id_h, hl_path)
+        tags += make_define_shape_bitmap(shp_id_h, bmp_id_h, 400, 112, display_w=btn_w, display_h=btn_h)
+        hl_wrap = bytearray()
+        hl_wrap += make_place_object2(shp_id_h, 1, 0, 0)
+        hl_wrap += make_show_frame()
+        hl_wrap += make_end_tag()
+        tags += make_define_sprite(spr_id_h, bytes(hl_wrap))
 
     # --- Button text labels (DefineEditText - empty initial, set from AS) ---
-    # Text field is offset right to leave room for the icon (20px from left)
-    btn_text_w = btn_w - 18  # narrower to leave room for icon
+    btn_text_w = btn_w - 30  # narrower: icon(20px) + gap(10px) = 30px used on left
     btn_text_defs = [
         (CHAR_BTN_TEXT_SUBMIT, (218, 165, 32, 255)),
         (CHAR_BTN_TEXT_INTIMIDATE, (204, 68, 68, 255)),
@@ -1960,7 +2017,7 @@ def build_swf():
             bounds=(0, btn_text_w * TWIPS, 0, btn_h * TWIPS),
             var_name="",
             initial_text="",
-            font_height=180,
+            font_height=200,
             font_id=FONT_MEDIUM_ID,
             html=True,
             read_only=True,
@@ -1968,27 +2025,30 @@ def build_swf():
             align=2,
         )
 
-    # --- Button MovieClip sprites (background normal + highlight + icon + text) ---
+    # --- Button MovieClip sprites (per-button bg normal + highlight + icon + text) ---
     btn_sprite_defs = [
-        (CHAR_BTN_SUBMIT, CHAR_BTN_TEXT_SUBMIT, CHAR_BTN_ICON_SHAPE_SUBMIT),
-        (CHAR_BTN_INTIMIDATE, CHAR_BTN_TEXT_INTIMIDATE, CHAR_BTN_ICON_SHAPE_INTIMIDATE),
-        (CHAR_BTN_CANCEL, CHAR_BTN_TEXT_CANCEL, CHAR_BTN_ICON_SHAPE_CANCEL),
-        (CHAR_BTN_ACCEPT, CHAR_BTN_TEXT_ACCEPT, CHAR_BTN_ICON_SHAPE_ACCEPT),
-        (CHAR_BTN_REOFFER, CHAR_BTN_TEXT_REOFFER, CHAR_BTN_ICON_SHAPE_REOFFER),
-        (CHAR_BTN_WALKAWAY, CHAR_BTN_TEXT_WALKAWAY, CHAR_BTN_ICON_SHAPE_WALKAWAY),
-        (CHAR_BTN_CONTINUE, CHAR_BTN_TEXT_CONTINUE, CHAR_BTN_ICON_SHAPE_CONTINUE),
+        (CHAR_BTN_SUBMIT, CHAR_BTN_TEXT_SUBMIT, CHAR_BTN_ICON_SHAPE_SUBMIT, 0),
+        (CHAR_BTN_INTIMIDATE, CHAR_BTN_TEXT_INTIMIDATE, CHAR_BTN_ICON_SHAPE_INTIMIDATE, 1),
+        (CHAR_BTN_CANCEL, CHAR_BTN_TEXT_CANCEL, CHAR_BTN_ICON_SHAPE_CANCEL, 2),
+        (CHAR_BTN_ACCEPT, CHAR_BTN_TEXT_ACCEPT, CHAR_BTN_ICON_SHAPE_ACCEPT, 3),
+        (CHAR_BTN_REOFFER, CHAR_BTN_TEXT_REOFFER, CHAR_BTN_ICON_SHAPE_REOFFER, 4),
+        (CHAR_BTN_WALKAWAY, CHAR_BTN_TEXT_WALKAWAY, CHAR_BTN_ICON_SHAPE_WALKAWAY, 5),
+        (CHAR_BTN_CONTINUE, CHAR_BTN_TEXT_CONTINUE, CHAR_BTN_ICON_SHAPE_CONTINUE, 6),
     ]
-    for sprite_id, text_id, icon_shape_id in btn_sprite_defs:
+    for sprite_id, text_id, icon_shape_id, btn_idx in btn_sprite_defs:
+        spr_id_n = btn_bg_sprite_base + btn_idx * 2
+        spr_id_h = btn_bg_sprite_base + btn_idx * 2 + 1
         inner = bytearray()
-        inner += make_place_object2(CHAR_BTN_BG_NORMAL_MC, 1, 0, 0, "bgNormal")
-        inner += make_place_object2_hidden(CHAR_BTN_BG_HIGHLIGHT_MC, 2, 0, 0, "bgHighlight")
-        # Icon at left side, vertically centered (16x16 icon in 24px tall button → y=4)
-        inner += make_place_object2(icon_shape_id, 4, 3, 4, "icon")
-        # Text label offset right to clear the icon
-        inner += make_place_object2(text_id, 3, 18, 2, "labelField")
+        inner += make_place_object2(spr_id_n, 1, 0, 0, "bgNormal")
+        inner += make_place_object2_hidden(spr_id_h, 2, 0, 0, "bgHighlight")
+        # Icon at left side, vertically centered (22x22 icon in 28px tall button → y=3)
+        inner += make_place_object2(icon_shape_id, 4, 5, 3, "icon")
+        # Text label closer to icon, vertically centered (btn_h=28, font 10pt → y=5)
+        inner += make_place_object2(text_id, 3, 28, 5, "labelField")
         inner += make_show_frame()
         inner += make_end_tag()
         tags += make_define_sprite(sprite_id, bytes(inner))
+
 
     # --- Text fields ---
     field_w = 300
@@ -2019,16 +2079,18 @@ def build_swf():
     # OfferLabel - Medium, size 8, muted
     tags += make_define_edit_text(
         char_id=CHAR_OFFER_LABEL,
-        bounds=(0, field_w * TWIPS, 0, 14 * TWIPS),
+        bounds=(0, field_w * TWIPS, 0, 20 * TWIPS),
         var_name="",
         initial_text="",
-        font_height=160,
+        font_height=240,
         font_id=FONT_MEDIUM_ID,
         html=True,
-        color=(128, 128, 128, 255),
+        color=(210, 180, 120, 255),
         align=2,
     )
-    # PriceText - Bold, size 22, gold
+    # PriceText - Bold, size 22, gold, center-aligned (visual center at stage x=640).
+    # The coin is a separate MovieClip that C++ parks just left of the number using
+    # this field's textWidth (see PositionCoin); no inline <img> is used.
     tags += make_define_edit_text(
         char_id=CHAR_PRICE_TEXT,
         bounds=(0, field_w * TWIPS, 0, 32 * TWIPS),
@@ -2037,6 +2099,8 @@ def build_swf():
         font_height=440,
         font_id=FONT_BOLD_ID,
         html=True,
+        multiline=True,
+        word_wrap=True,
         color=(218, 165, 32, 255),
         align=2,
     )
@@ -2088,18 +2152,37 @@ def build_swf():
         color=(255, 255, 255, 255),
         align=2,
     )
-    # ButtonHintText - Medium, size 7, grey
+    # ButtonHintText - Medium, grey. Multiline + word-wrap are required for GFx to
+    # render inline <img> glyphs; height is enlarged to fit the keybind glyphs.
     tags += make_define_edit_text(
         char_id=CHAR_BUTTON_HINT,
-        bounds=(0, field_w * TWIPS, 0, 12 * TWIPS),
+        bounds=(0, field_w * TWIPS, 0, 26 * TWIPS),
         var_name="",
         initial_text="",
-        font_height=140,
+        font_height=160,
         font_id=FONT_MEDIUM_ID,
         html=True,
-        color=(112, 112, 112, 255),
+        multiline=True,
+        word_wrap=True,
+        color=(154, 140, 120, 255),
         align=2,
     )
+
+    # Hint-row labels. Each sits just right of a placed keybind glyph shape. Inline
+    # <img> glyphs do NOT render in this SWF, so the hint row is built from placed
+    # glyph shapes (toggled by device in C++) + these small left-aligned labels.
+    for _hint_lbl_id in (CHAR_HINT_LBL_1, CHAR_HINT_LBL_2, CHAR_HINT_LBL_3, CHAR_HINT_LBL_4):
+        tags += make_define_edit_text(
+            char_id=_hint_lbl_id,
+            bounds=(0, 78 * TWIPS, 0, 16 * TWIPS),
+            var_name="",
+            initial_text="",
+            font_height=150,
+            font_id=FONT_MEDIUM_ID,
+            html=True,
+            color=(154, 140, 120, 255),
+            align=0,
+        )
 
     # --- NEW: Enhanced visual elements ---
 
@@ -2162,16 +2245,54 @@ def build_swf():
         line_color=(80, 70, 50, 200),
         line_width=10,
     )
-    # Relationship bar fill (colored, same size - will be scaled by _xscale in AS)
+    # Colored zone segments (each 24px of the 120px bar): hostile red on the left,
+    # through neutral amber, to friendly green on the right. Static background that
+    # gives the marker position meaning.
+    rel_zone_w = rel_bar_w // 5  # 24px
+    rel_zone_colors = [
+        (190, 70, 64, 255),    # 0: hostile (red)
+        (205, 120, 70, 255),   # 1: cool (red-orange)
+        (200, 175, 90, 255),   # 2: neutral (amber)
+        (150, 180, 85, 255),   # 3: warm (yellow-green)
+        (90, 185, 90, 255),    # 4: friendly (green)
+    ]
+    rel_zone_ids = [CHAR_REL_ZONE_0, CHAR_REL_ZONE_1, CHAR_REL_ZONE_2, CHAR_REL_ZONE_3, CHAR_REL_ZONE_4]
+    for zid, zcol in zip(rel_zone_ids, rel_zone_colors):
+        tags += make_define_shape(
+            char_id=zid,
+            fill_color=zcol,
+            bounds=(0, rel_zone_w, 0, rel_bar_h),
+        )
+    # Moving marker: a bright vertical tick taller than the bar so it reads as a
+    # position indicator on the meter (distinct from the slider's diamond).
     tags += make_define_shape(
-        char_id=CHAR_REL_BAR_FILL,
-        fill_color=(180, 150, 60, 255),
-        bounds=(0, rel_bar_w, 0, rel_bar_h),
+        char_id=CHAR_REL_MARKER,
+        fill_color=(245, 240, 225, 255),
+        bounds=(0, 5, 0, 16),
+        line_color=(30, 26, 20, 255),
+        line_width=20,
     )
-    # Wrap fill in MovieClip for _xscale manipulation
+    # Wrap each fill + the marker in its OWN MovieClip. GFx only reliably honors
+    # _x / _xscale / _visible on MovieClip instances (this is why the slider handle
+    # is wrapped); bare shapes leave the marker pinned and the fill colour unswapped.
+    def _wrap_mc(shape_id, mc_id, ox=0, oy=0):
+        body = bytearray()
+        body += make_place_object2(shape_id, 1, ox, oy)
+        body += make_show_frame()
+        body += make_end_tag()
+        return make_define_sprite(mc_id, bytes(body))
+
+    # Marker shape (5px wide, 16px tall) centered on the MC origin so marker._x is
+    # the marker's CENTER; y=-5 straddles the 6px bar.
+    tags += _wrap_mc(CHAR_REL_MARKER, CHAR_REL_MARKER_MC, ox=-2, oy=-5)
+
+    # Assemble the meter MovieClip: dark frame, the 5 colored zone segments laid
+    # left-to-right, then the marker on top (highest depth = drawn last/on top).
     rel_bar_inner = bytearray()
     rel_bar_inner += make_place_object2(CHAR_REL_BAR_BG, 1, 0, 0, "bg")
-    rel_bar_inner += make_place_object2(CHAR_REL_BAR_FILL, 2, 0, 0, "fill")
+    for i, zid in enumerate(rel_zone_ids):
+        rel_bar_inner += make_place_object2(zid, 2 + i, i * rel_zone_w, 0, "zone{}".format(i))
+    rel_bar_inner += make_place_object2(CHAR_REL_MARKER_MC, 8, 0, 0, "marker")
     rel_bar_inner += make_show_frame()
     rel_bar_inner += make_end_tag()
     tags += make_define_sprite(CHAR_REL_BAR_MC, bytes(rel_bar_inner))
@@ -2184,6 +2305,68 @@ def build_swf():
     tags += make_define_shape_bitmap(CHAR_CORNER_TR, CHAR_BMP_CORNER_TR, 128, 128, display_w=40, display_h=40)
     tags += make_define_shape_bitmap(CHAR_CORNER_BL, CHAR_BMP_CORNER_BL, 128, 128, display_w=40, display_h=40)
     tags += make_define_shape_bitmap(CHAR_CORNER_BR, CHAR_BMP_CORNER_BR, 128, 128, display_w=40, display_h=40)
+
+    # ===================================================================
+    # KEYBIND HINT GLYPHS (controller + keyboard)
+    # ===================================================================
+    # Each glyph is embedded as a bitmap -> bitmap-fill shape -> sprite, and the
+    # sprite is exported with a linkage name so the hint text field can render it
+    # inline via <img src='linkageName'/>. Sizes keep each glyph's aspect ratio at
+    # a uniform display height so they line up in the hint bar.
+    from PIL import Image as _GlyphImage
+    glyphs_dir = os.path.join(icons_dir, "glyphs")
+    glyph_defs = [
+        ("g_xb_a", "glyph_xbox_a.png"),
+        ("g_xb_b", "glyph_xbox_b.png"),
+        ("g_xb_x", "glyph_xbox_x.png"),
+        ("g_xb_lb", "glyph_xbox_lb.png"),
+        ("g_xb_rb", "glyph_xbox_rb.png"),
+        ("g_ps_cross", "glyph_ps_cross.png"),
+        ("g_ps_circle", "glyph_ps_circle.png"),
+        ("g_ps_square", "glyph_ps_square.png"),
+        ("g_ps_l1", "glyph_ps_l1.png"),
+        ("g_ps_r1", "glyph_ps_r1.png"),
+        ("g_pad", "glyph_dpad.png"),
+        ("g_kbd_e", "glyph_key_e.png"),
+        ("g_kbd_r", "glyph_key_r.png"),
+        ("g_kbd_tab", "glyph_key_tab.png"),
+        ("g_kbd_arrows", "glyph_key_arrows.png"),
+    ]
+    GLYPH_DISPLAY_H = 16  # px tall in the hint bar
+    glyph_next_id = 100   # existing char ids top out at 96
+    glyph_exports = []
+    glyph_shapes = {}     # linkage -> DefineShape id
+    glyph_sprites = {}    # linkage -> DefineSprite (MovieClip) id; place THESE so _visible works
+    for linkage, fn in glyph_defs:
+        path = os.path.join(glyphs_dir, fn)
+        with _GlyphImage.open(path) as gi:
+            gw, gh = gi.size
+        disp_h = GLYPH_DISPLAY_H
+        disp_w = max(1, int(round(GLYPH_DISPLAY_H * gw / float(gh))))
+        bmp_id = glyph_next_id; glyph_next_id += 1
+        shp_id = glyph_next_id; glyph_next_id += 1
+        spr_id = glyph_next_id; glyph_next_id += 1
+        tags += make_define_bits_lossless2(bmp_id, path)
+        tags += make_define_shape_bitmap(shp_id, bmp_id, gw, gh, display_w=disp_w, display_h=disp_h)
+        glyph_shapes[linkage] = shp_id
+        spr = bytearray()
+        spr += make_place_object2(shp_id, 1, 0, 0)
+        spr += make_show_frame()
+        spr += make_end_tag()
+        tags += make_define_sprite(spr_id, bytes(spr))
+        glyph_sprites[linkage] = spr_id
+        glyph_exports.append((spr_id, linkage))
+
+    # Coin sprite exported as "g_coin" so the price text can render the septim
+    # inline (<img src='g_coin'>), keeping it right next to the gold amount.
+    coin_spr = bytearray()
+    coin_spr += make_place_object2(CHAR_BMP_COIN_SHAPE, 1, 0, 0)
+    coin_spr += make_show_frame()
+    coin_spr += make_end_tag()
+    tags += make_define_sprite(CHAR_COIN_SPRITE, bytes(coin_spr))
+    glyph_exports.append((CHAR_COIN_SPRITE, "g_coin"))
+
+    tags += make_export_assets(glyph_exports)
 
     # ===================================================================
     # STAGE PLACEMENT
@@ -2231,11 +2414,14 @@ def build_swf():
     tags += make_place_object2(CHAR_BMP_ORNAMENT_SHAPE, 3, ornament_x, ornament_y, "ornament")
 
     # Price comparison section
-    tags += make_place_object2(CHAR_BASE_PRICE_TEXT, 27, tx, panel_y + 62, "BasePriceText")
-    tags += make_place_object2(CHAR_OFFER_LABEL, 12, tx, panel_y + 78, "OfferLabel")
+    tags += make_place_object2(CHAR_BASE_PRICE_TEXT, 27, tx, panel_y + 60, "BasePriceText")
+    tags += make_place_object2(CHAR_OFFER_LABEL, 12, tx, panel_y + 74, "OfferLabel")
 
-    # Gold coin + big price text
-    tags += make_place_object2(CHAR_BMP_COIN_SHAPE, 5, tx + 6, panel_y + 97, "coinIcon")
+    # Big price text + standalone coin glyph. GFx silently drops inline <img> here,
+    # so the coin is the coin MovieClip (CHAR_COIN_SPRITE) that C++ repositions each
+    # frame to hug the (center-aligned) number via PriceText.textWidth. It MUST be a
+    # MovieClip (not a bare shape) or _x is ignored — same lesson as the slider handle.
+    tags += make_place_object2(CHAR_COIN_SPRITE, 5, tx + 6, panel_y + 96, "coinIcon")
     tags += make_place_object2(CHAR_PRICE_TEXT, 13, tx, panel_y + 92, "PriceText")
 
     # Slider section
@@ -2246,34 +2432,34 @@ def build_swf():
     tags += make_place_object2(CHAR_BMP_ARROW_LEFT_SHAPE, 6, slider_x - 18, slider_y - 7, "arrowLeft")
     tags += make_place_object2(CHAR_BMP_ARROW_RIGHT_SHAPE, 7, slider_x + 203, slider_y - 7, "arrowRight")
 
-    # Acceptance indicator
-    tags += make_place_object2(CHAR_ACCEPTANCE_TEXT, 28, tx, panel_y + 158, "AcceptanceText")
+    # Acceptance indicator (shifted down to clear Adjust keybind hint above slider)
+    tags += make_place_object2(CHAR_ACCEPTANCE_TEXT, 28, tx, panel_y + 176, "AcceptanceText")
 
     # Separator before relationship section
     sep_x = panel_x + 30
-    tags += make_place_object2(CHAR_SEPARATOR_LINE, 44, sep_x, panel_y + 176)
+    tags += make_place_object2(CHAR_SEPARATOR_LINE, 44, sep_x, panel_y + 194)
 
     # Relationship section
-    tags += make_place_object2(CHAR_REACTION_TEXT, 16, tx, panel_y + 182, "ReactionText")
+    tags += make_place_object2(CHAR_REACTION_TEXT, 16, tx, panel_y + 200, "ReactionText")
     # Relationship bar (centered)
     rel_bar_x = 640 - 60
-    tags += make_place_object2(CHAR_REL_BAR_MC, 29, rel_bar_x, panel_y + 198, "relBarMC")
+    tags += make_place_object2(CHAR_REL_BAR_MC, 29, rel_bar_x, panel_y + 216, "relBarMC")
     # Effect preview
-    tags += make_place_object2(CHAR_REL_EFFECT_TEXT, 30, tx, panel_y + 210, "RelEffectText")
+    tags += make_place_object2(CHAR_REL_EFFECT_TEXT, 30, tx, panel_y + 228, "RelEffectText")
 
     # Deal history synopsis
-    tags += make_place_object2(CHAR_DEAL_HISTORY_TEXT, 31, tx, panel_y + 226, "DealHistoryText")
+    tags += make_place_object2(CHAR_DEAL_HISTORY_TEXT, 31, tx, panel_y + 244, "DealHistoryText")
 
     # Separator before buttons
-    tags += make_place_object2(CHAR_SEPARATOR_LINE, 45, sep_x, panel_y + 242)
+    tags += make_place_object2(CHAR_SEPARATOR_LINE, 45, sep_x, panel_y + 260)
 
     # StatusText (item name - overlay position)
     tags += make_place_object2(CHAR_STATUS_TEXT, 17, tx, panel_y + 70, "StatusText")
 
-    # Buttons - offer state (centered: 3*80 + 2*8 = 256px, panel_w=340, margin=(340-256)/2=42)
-    btn_y = panel_y + 252
+    # Buttons - offer state (centered: 3*100 + 2*8 = 316px, panel_w=340, margin=(340-316)/2=12)
+    btn_y = panel_y + 270
     btn_gap = 8
-    btn_start_x = panel_x + 42
+    btn_start_x = panel_x + 12
     tags += make_place_object2(CHAR_BTN_SUBMIT, 20, btn_start_x, btn_y, "btn_submit")
     tags += make_place_object2(CHAR_BTN_INTIMIDATE, 21, btn_start_x + btn_w + btn_gap, btn_y, "btn_intimidate")
     tags += make_place_object2(CHAR_BTN_CANCEL, 22, btn_start_x + 2 * (btn_w + btn_gap), btn_y, "btn_cancel")
@@ -2284,8 +2470,79 @@ def build_swf():
     # Buttons - result state (hidden by default)
     tags += make_place_object2_hidden(CHAR_BTN_CONTINUE, 26, 640 - btn_w // 2, btn_y, "btn_continue")
 
-    # Button hints at bottom
-    tags += make_place_object2(CHAR_BUTTON_HINT, 18, tx, panel_y + 284, "ButtonHintText")
+    # Button hints at bottom. ButtonHintText is kept (hidden/empty) as a fallback;
+    # the visible hint row is built from placed glyph shapes + labels below.
+    tags += make_place_object2(CHAR_BUTTON_HINT, 18, tx, panel_y + 302, "ButtonHintText")
+
+    # --- Keybind hints (placed glyph shapes + labels) -------------------
+    # 4 hint slots:
+    #   Slot 0 (Confirm)    → under Submit button
+    #   Slot 1 (Intimidate) → under Intimidate button
+    #   Slot 2 (Cancel)     → under Cancel button
+    #   Slot 3 (Adjust)     → under gold slider (different Y)
+    glyph_w = 16
+    depth = 50
+
+    # Button hint row: Y just below button row
+    btn_hint_y = btn_y + btn_h + 4       # glyph Y
+    btn_hint_lbl_y = btn_y + btn_h + 3   # label Y
+
+    # Slot X positions centered under each button
+    slot0_x = btn_start_x + btn_w // 2 - 20   # under Submit
+    slot1_x = btn_start_x + (btn_w + btn_gap) + btn_w // 2 - 20  # under Intimidate
+    slot2_x = btn_start_x + 2 * (btn_w + btn_gap) + btn_w // 2 - 20  # under Cancel
+
+    # Adjust slot: centered under slider
+    adjust_hint_y = slider_y + 20         # below slider track
+    adjust_hint_lbl_y = slider_y + 19
+    slot3_x = 640 - 20                    # centered under slider
+
+    KBD_X_SHIFT = -4       # shift single-char keyboard glyphs left slightly
+    KBD_X_SHIFT_WIDE = -8  # shift wider glyphs (Tab, Arrows) further left
+
+    def place_hint_at(linkage, x, y, name, is_kbd=False, wide_kbd=False):
+        nonlocal tags, depth
+        x_offset = (KBD_X_SHIFT_WIDE if wide_kbd else KBD_X_SHIFT) if is_kbd else 0
+        tags += make_place_object2_hidden(glyph_sprites[linkage], depth, x + x_offset, y, name)
+        depth += 1
+
+    # Slot 0: Confirm (under Submit button)
+    place_hint_at("g_kbd_e",     slot0_x, btn_hint_y, "hg_e",   is_kbd=True)
+    place_hint_at("g_xb_a",      slot0_x, btn_hint_y, "hg_a")
+    place_hint_at("g_ps_cross",  slot0_x, btn_hint_y, "hg_cr")
+
+    # Slot 1: Intimidate (under Intimidate button) — R key / X xbox / Square PS
+    place_hint_at("g_kbd_r",     slot1_x, btn_hint_y, "hg_r_intim", is_kbd=True)
+    place_hint_at("g_xb_x",      slot1_x, btn_hint_y, "hg_x_intim")
+    place_hint_at("g_ps_square", slot1_x, btn_hint_y, "hg_sq_intim")
+
+    # Slot 2: Cancel (under Cancel button)
+    place_hint_at("g_kbd_tab",   slot2_x, btn_hint_y, "hg_tab", is_kbd=True, wide_kbd=True)
+    place_hint_at("g_xb_b",      slot2_x, btn_hint_y, "hg_b")
+    place_hint_at("g_ps_circle", slot2_x, btn_hint_y, "hg_ci")
+
+    # Slot 3: Adjust (under gold slider)
+    place_hint_at("g_kbd_arrows", slot3_x, adjust_hint_y, "hg_ar",  is_kbd=True, wide_kbd=True)
+    place_hint_at("g_pad",        slot3_x, adjust_hint_y, "hg_pad")
+
+    # Counter-offer state alternate glyphs (reuse slot positions)
+    # Slot 1 becomes Re-offer in counter state: R key / X xbox / Square PS
+    place_hint_at("g_kbd_r",     slot1_x, btn_hint_y, "hg_r",   is_kbd=True)
+    # Slot 2 becomes Walk Away in counter state: Tab / B / Circle
+    place_hint_at("g_kbd_tab",   slot2_x, btn_hint_y, "hg_tab2", is_kbd=True, wide_kbd=True)
+    place_hint_at("g_xb_b",      slot2_x, btn_hint_y, "hg_b2")
+    place_hint_at("g_ps_circle", slot2_x, btn_hint_y, "hg_ci2")
+
+    # Labels for each slot
+    # Label offsets: Tab key (slot 2) needs more space than R/E keys (slots 0, 1)
+    lbl_dx_0 = 18   # E key
+    lbl_dx_1 = 18   # R key
+    lbl_dx_2 = 26   # Tab key (wider glyph)
+    lbl_dx_3 = 26   # Arrows (wider glyph)
+    tags += make_place_object2(CHAR_HINT_LBL_1, depth, slot0_x + lbl_dx_0, btn_hint_lbl_y, "HintLbl1"); depth += 1
+    tags += make_place_object2(CHAR_HINT_LBL_2, depth, slot1_x + lbl_dx_1, btn_hint_lbl_y, "HintLbl2"); depth += 1
+    tags += make_place_object2(CHAR_HINT_LBL_3, depth, slot2_x + lbl_dx_2, btn_hint_lbl_y, "HintLbl3"); depth += 1
+    tags += make_place_object2(CHAR_HINT_LBL_4, depth, slot3_x + lbl_dx_3, adjust_hint_lbl_y, "HintLbl4"); depth += 1
 
     # ===================================================================
     # ACTIONSCRIPT

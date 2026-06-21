@@ -64,8 +64,8 @@ void UIBridge::ShowCounterOffer(int counterAmount, int patience) {
     if (activeUI) activeUI->ShowCounterOffer(counterAmount, patience);
 }
 
-void UIBridge::ShowResult(bool accepted, int relDelta) {
-    if (activeUI) activeUI->ShowResult(accepted, relDelta);
+void UIBridge::ShowResult(bool accepted, int goldAmount, int relDelta) {
+    if (activeUI) activeUI->ShowResult(accepted, goldAmount, relDelta);
 }
 
 void UIBridge::Hide() {

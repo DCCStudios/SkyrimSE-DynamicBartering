@@ -2,6 +2,107 @@
 #include "UI/ScaleformUI.h"
 #include "BarterManager.h"
 #include "Hooks.h"
+#include "Settings.h"
+
+namespace {
+    // How far above market the slider lets the player go (paying more when buying,
+    // asking more when selling). 3.0 = up to +200% over market.
+    constexpr double kOverMarketCapMult = 3.0;
+
+    // Build an inline keybind glyph: <img> referencing an exported SWF sprite
+    // (linkage name set via ExportAssets in generate_swf.py).
+    inline std::string GlyphImg(const char* linkage) {
+        // vspace nudges the glyph onto the text baseline. Matches vanilla Skyrim's
+        // inline-image convention (e.g. "<img src='BestIcon.png' vspace='2'>").
+        // Requires _global.gfxExtensions=true in the SWF or GFx ignores <img>.
+        return std::string("<img src='") + linkage + "' vspace='2' />";
+    }
+    inline bool UsePlayStationGlyphs() {
+        return Settings::GetSingleton()->gamepadIconStyle == GamepadIconStyle::PlayStation;
+    }
+    // Logical action glyphs. Keyboard uses keycaps; gamepad respects the icon style.
+    inline std::string GlyphAccept(bool gamepad) {
+        if (!gamepad) return GlyphImg("g_kbd_e");
+        return UsePlayStationGlyphs() ? GlyphImg("g_ps_cross") : GlyphImg("g_xb_a");
+    }
+    inline std::string GlyphCancel(bool gamepad) {
+        if (!gamepad) return GlyphImg("g_kbd_tab");
+        return UsePlayStationGlyphs() ? GlyphImg("g_ps_circle") : GlyphImg("g_xb_b");
+    }
+    inline std::string GlyphReoffer(bool gamepad) {
+        if (!gamepad) return GlyphImg("g_kbd_r");
+        return UsePlayStationGlyphs() ? GlyphImg("g_ps_square") : GlyphImg("g_xb_x");
+    }
+    inline std::string GlyphAdjust(bool gamepad) {
+        return gamepad ? GlyphImg("g_pad") : GlyphImg("g_kbd_arrows");
+    }
+    inline std::string GlyphBumpers() {
+        return UsePlayStationGlyphs() ? (GlyphImg("g_ps_l1") + GlyphImg("g_ps_r1"))
+                                      : (GlyphImg("g_xb_lb") + GlyphImg("g_xb_rb"));
+    }
+    // Wrap a hint line. A leading non-breaking space ensures the first element is
+    // not an <img> (GFx will not render an image as the very first item in a field).
+    inline std::string HintLine(const std::string& inner) {
+        return "<p align=\"center\"><font face=\"$EverywhereMediumFont\" size=\"10\" color=\"#9a8c78\">&#160;"
+             + inner + "</font></p>";
+    }
+    inline std::string OfferHintHtml(bool gamepad) {
+        std::string s = GlyphAccept(gamepad) + " Confirm  " + GlyphCancel(gamepad) + " Cancel  ";
+        if (gamepad) s += GlyphBumpers() + " +/-5  ";
+        s += GlyphAdjust(gamepad) + " Adjust";
+        return HintLine(s);
+    }
+    inline std::string CounterHintHtml(bool gamepad) {
+        return HintLine(GlyphAccept(gamepad) + " Accept  " + GlyphReoffer(gamepad) + " Re-offer  "
+                        + GlyphCancel(gamepad) + " Walk Away");
+    }
+    inline std::string ResultHintHtml(bool gamepad) {
+        return HintLine(GlyphAccept(gamepad) + " Retry  " + GlyphCancel(gamepad) + " Cancel");
+    }
+
+    // Relationship state name + color + a short descriptive blurb (à la the
+    // reference relationship display).
+    inline const char* RelStateName(int rel) {
+        if (rel >= 60) return "Trusted";
+        if (rel >= 30) return "Friendly";
+        if (rel >= 10) return "Warm";
+        if (rel >= -10) return "Neutral";
+        if (rel >= -30) return "Cool";
+        if (rel >= -60) return "Hostile";
+        return "Despised";
+    }
+    inline const char* RelStateColor(int rel) {
+        if (rel >= 30) return "#5ABF5A";
+        if (rel >= 10) return "#9FC85A";
+        if (rel >= -10) return "#D4B054";
+        if (rel >= -30) return "#D08030";
+        return "#C85050";
+    }
+    inline const char* RelBlurb(int rel) {
+        if (rel >= 30) return "Values you as a friend. More flexible on price.";
+        if (rel >= 10) return "Warming to you. Open to a good deal.";
+        if (rel >= -10) return "Open to reasonable offers.";
+        if (rel >= -30) return "Wary of you. Drives a harder bargain.";
+        return "Dislikes lowball offers. Easily offended.";
+    }
+
+    // Map an acceptance chance to verdict text + color. The ACCEPT band starts at
+    // the SAME threshold BarterManager uses to guarantee acceptance, so a shown
+    // "will ACCEPT" can never be rejected on submit.
+    inline void AcceptanceBand(float chance, std::string& text, std::string& color) {
+        if (chance >= BarterManager::kGuaranteedAcceptThreshold) {
+            text = "Merchant will ACCEPT this offer"; color = "#50B050";
+        } else if (chance >= 60.0f) {
+            text = "Merchant will likely accept";      color = "#80B050";
+        } else if (chance >= 40.0f) {
+            text = "Merchant looks uncertain";          color = "#D4B054";
+        } else if (chance >= 20.0f) {
+            text = "Merchant looks unimpressed";        color = "#D08030";
+        } else {
+            text = "Merchant will likely REFUSE";       color = "#B05050";
+        }
+    }
+}
 
 BarterOfferMenu::BarterOfferMenu() {
     logger::info("BarterOfferMenu: Constructing menu, loading SWF from '{}'", MENU_PATH);
@@ -77,6 +178,108 @@ void BarterOfferMenu::Hide() {
         msgQ->AddMessage(MENU_NAME, RE::UI_MESSAGE_TYPE::kHide, nullptr);
     }
     Hooks::interceptingTransaction = false;
+}
+
+void BarterOfferMenu::ApplyHintCells(int state) {
+    if (!uiMovie) return;
+    const bool gamepad = lastInputWasGamepad;
+    const bool ps = Settings::GetSingleton()->gamepadIconStyle == GamepadIconStyle::PlayStation;
+
+    auto setVis = [this](const char* path, bool v) {
+        RE::GFxValue val; val.SetBoolean(v);
+        uiMovie->SetVariable(path, val);
+    };
+    // Glyph icons were placed with alpha=0 (CxFormWithAlpha). _visible alone doesn't
+    // change alpha, so we must also drive _alpha to make them appear/disappear.
+    auto showGlyph = [this](const char* instanceName) {
+        std::string base = std::string("_root.") + instanceName;
+        RE::GFxValue t; t.SetBoolean(true);
+        uiMovie->SetVariable((base + "._visible").c_str(), t);
+        RE::GFxValue a; a.SetNumber(100.0);
+        uiMovie->SetVariable((base + "._alpha").c_str(), a);
+    };
+    auto setLbl = [this](const char* path, const char* text) {
+        std::string html =
+            std::string("<p align=\"left\"><font face=\"$EverywhereMediumFont\" size=\"10\" color=\"#9a8c78\">")
+            + text + "</font></p>";
+        RE::GFxValue val; val.SetString(html.c_str());
+        uiMovie->SetVariable(path, val);
+    };
+
+    // Hide every glyph variant: set _visible=false AND _alpha=0 (belt-and-suspenders
+    // because the initial placement uses alpha=0 CxForm which persists).
+    static const char* allGlyphNames[] = {
+        "hg_e", "hg_a", "hg_cr",
+        "hg_r_intim", "hg_x_intim", "hg_sq_intim",
+        "hg_tab", "hg_b", "hg_ci",
+        "hg_r",
+        "hg_ar", "hg_pad",
+        "hg_tab2", "hg_b2", "hg_ci2",
+    };
+    for (auto* name : allGlyphNames) {
+        std::string base = std::string("_root.") + name;
+        RE::GFxValue f; f.SetBoolean(false);
+        uiMovie->SetVariable((base + "._visible").c_str(), f);
+        RE::GFxValue z; z.SetNumber(0.0);
+        uiMovie->SetVariable((base + "._alpha").c_str(), z);
+    }
+    setVis("_root.ButtonHintText._visible", false);
+    setVis("_root.HintLbl1._visible", false);
+    setVis("_root.HintLbl2._visible", false);
+    setVis("_root.HintLbl3._visible", false);
+    setVis("_root.HintLbl4._visible", false);
+
+    if (state < 0) return;  // hide-all (e.g. accepted result screen)
+
+    // Slot 0 (under Submit): Confirm / Accept / Retry -> E / A / Cross
+    showGlyph(gamepad ? (ps ? "hg_cr" : "hg_a") : "hg_e");
+
+    if (state == 1) {  // counter
+        // Slot 1 (under Intimidate): Re-offer -> R / X / Square
+        showGlyph(gamepad ? (ps ? "hg_sq_intim" : "hg_x_intim") : "hg_r");
+        // Slot 2 (under Cancel): Walk Away -> Tab / B / Circle
+        showGlyph(gamepad ? (ps ? "hg_ci2" : "hg_b2") : "hg_tab2");
+        setLbl("_root.HintLbl1.htmlText", "Accept");
+        setLbl("_root.HintLbl2.htmlText", "Re-offer");
+        setLbl("_root.HintLbl3.htmlText", "Walk Away");
+        setVis("_root.HintLbl4._visible", false);
+    } else if (state == 2) {  // result
+        // Slot 2 (under Cancel): Cancel -> Tab / B / Circle
+        showGlyph(gamepad ? (ps ? "hg_ci" : "hg_b") : "hg_tab");
+        setLbl("_root.HintLbl1.htmlText", "Retry");
+        setLbl("_root.HintLbl2.htmlText", "");
+        setLbl("_root.HintLbl3.htmlText", "Cancel");
+        setVis("_root.HintLbl2._visible", false);
+        setVis("_root.HintLbl4._visible", false);
+    } else {  // offer
+        // Slot 1 (under Intimidate): Intimidate -> R / X / Square
+        showGlyph(gamepad ? (ps ? "hg_sq_intim" : "hg_x_intim") : "hg_r_intim");
+        // Slot 2 (under Cancel): Cancel -> Tab / B / Circle
+        showGlyph(gamepad ? (ps ? "hg_ci" : "hg_b") : "hg_tab");
+        // Slot 3 (under slider): Adjust -> Arrows / DPad
+        showGlyph(gamepad ? "hg_pad" : "hg_ar");
+        setLbl("_root.HintLbl1.htmlText", "Confirm");
+        setLbl("_root.HintLbl2.htmlText", "Intimidate");
+        setLbl("_root.HintLbl3.htmlText", "Cancel");
+        setLbl("_root.HintLbl4.htmlText", "Adjust");
+        setVis("_root.HintLbl4._visible", true);
+    }
+    setVis("_root.HintLbl1._visible", true);
+    setVis("_root.HintLbl2._visible", true);
+    setVis("_root.HintLbl3._visible", true);
+}
+
+void BarterOfferMenu::PositionCoin() {
+    if (!uiMovie) return;
+    RE::GFxValue twVal;
+    if (uiMovie->GetVariable(&twVal, "_root.PriceText.textWidth") && twVal.IsNumber()) {
+        double tw = twVal.GetNumber();
+        // PriceText is center-aligned with a visual center at stage x=640. Park the
+        // coin just left of the number's left edge (640 - tw/2), with a small gap.
+        double coinX = 640.0 - (tw / 2.0) - 22.0;
+        RE::GFxValue cx; cx.SetNumber(coinX);
+        uiMovie->SetVariable("_root.coinIcon._x", cx);
+    }
 }
 
 void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime) {
@@ -266,27 +469,23 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
         bool currentGamepad = inputSink->IsUsingGamepad();
         if (currentGamepad != lastInputWasGamepad) {
             lastInputWasGamepad = currentGamepad;
-            RE::GFxValue hintVal;
-            if (showingCounter) {
-                if (lastInputWasGamepad) {
-                    hintVal.SetString(R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="#606060">[A] Accept    [X] Re-offer    [B] Walk Away</font></p>)");
-                } else {
-                    hintVal.SetString(R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="#606060">[E] Accept    [R] Re-offer    [Tab] Walk Away</font></p>)");
-                }
-            } else if (showingResult) {
-                if (lastInputWasGamepad) {
-                    hintVal.SetString(R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="#606060">[A] Retry    [B] Cancel</font></p>)");
-                } else {
-                    hintVal.SetString(R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="#606060">[E] Retry    [Tab] Cancel</font></p>)");
-                }
-            } else {
-                if (lastInputWasGamepad) {
-                    hintVal.SetString(R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="#606060">[A] Confirm    [B] Cancel    [LB/RB] +/-5    [D-pad] Adjust</font></p>)");
-                } else {
-                    hintVal.SetString(R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="#606060">[E] Confirm    [Tab] Cancel    [LB/RB] +/-5    [Arrow Keys] Adjust</font></p>)");
-                }
+            ApplyHintCells(showingCounter ? 1 : showingResult ? 2 : 0);
+        }
+
+        // Keep the coin glyph hugging the (center-aligned) price number every frame.
+        if (!showingCounter) {
+            PositionCoin();
+        }
+
+        // Ease the relationship-meter marker toward its target (visible only in the
+        // offer state). Same idea as the slider handle: code-driven movie-clip motion.
+        if (!showingCounter && !showingResult && relMarkerCurX >= 0.0f) {
+            float diff = relMarkerTargetX - relMarkerCurX;
+            if (std::abs(diff) > 0.25f) {
+                relMarkerCurX += diff * 0.25f;
+                RE::GFxValue mx; mx.SetNumber(relMarkerCurX);
+                uiMovie->SetVariable("_root.relBarMC.marker._x", mx);
             }
-            uiMovie->SetVariable("_root.ButtonHintText.htmlText", hintVal);
         }
 
         // --- Raw gamepad input via InputDeviceSink (bypasses broken input context) ---
@@ -331,7 +530,7 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
                 });
             }
         }
-        // X button = re-offer (only in counter state)
+        // X button = re-offer (counter state) OR intimidate (offer state)
         if (inputSink->ConsumeX()) {
             if (showingCounter) {
                 showingCounter = false;
@@ -339,15 +538,25 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
                 SKSE::GetTaskInterface()->AddTask([]() {
                     BarterManager::GetSingleton()->OnCounterResponse(1);
                 });
+            } else if (!showingResult) {
+                inputCooldown = 0.3f;
+                SKSE::GetTaskInterface()->AddTask([]() {
+                    BarterManager::GetSingleton()->OnIntimidateAttempt();
+                });
             }
         }
-        // Keyboard R = re-offer (only in counter state)
+        // Keyboard R = re-offer (counter state) OR intimidate (offer state)
         if (inputSink->ConsumeR()) {
             if (showingCounter) {
                 showingCounter = false;
                 RestoreOfferUI();
                 SKSE::GetTaskInterface()->AddTask([]() {
                     BarterManager::GetSingleton()->OnCounterResponse(1);
+                });
+            } else if (!showingResult) {
+                inputCooldown = 0.3f;
+                SKSE::GetTaskInterface()->AddTask([]() {
+                    BarterManager::GetSingleton()->OnIntimidateAttempt();
                 });
             }
         }
@@ -460,37 +669,22 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
                 effPriceVal.GetType() == RE::GFxValue::ValueType::kNumber) {
                 double offeredGold = sliderVal.GetNumber();
                 double effPrice = effPriceVal.GetNumber();
-                double baseChance = baseChanceVal.GetType() == RE::GFxValue::ValueType::kNumber
-                    ? baseChanceVal.GetNumber() : 50.0;
+                (void)baseChanceVal;
 
-                // Calculate discount percentage from gold values
-                double pct = effPrice > 0 ? ((offeredGold - effPrice) / effPrice) * 100.0 : 0.0;
+                // Standing-effect percentage, oriented by deal direction. When BUYING,
+                // paying above market (offered > market) is generous. When SELLING,
+                // generosity is the opposite: asking LESS than market helps your
+                // standing, asking more (overcharging) hurts it. So invert for sells.
+                double rawPct = effPrice > 0 ? ((offeredGold - effPrice) / effPrice) * 100.0 : 0.0;
+                double pct = currentIsBuying ? rawPct : -rawPct;
 
-                // Estimate acceptance based on discount
-                double penalty = 0.0;
-                if (pct < 0) penalty = std::abs(pct) * 1.5;
-                else penalty = -pct * 0.5;
-                double estimatedChance = std::clamp(baseChance - penalty, 0.0, 99.0);
+                // Use the AUTHORITATIVE chance (same code path as the real decision)
+                // so the displayed verdict can never disagree with the outcome.
+                float authChance = BarterManager::GetSingleton()->PreviewAcceptanceChance(
+                    static_cast<int>(std::round(offeredGold)));
 
-                // Update acceptance text
-                std::string acceptText;
-                std::string acceptColor;
-                if (estimatedChance >= 80) {
-                    acceptText = "Merchant will ACCEPT this offer";
-                    acceptColor = "#50B050";
-                } else if (estimatedChance >= 60) {
-                    acceptText = "Merchant will likely accept";
-                    acceptColor = "#80B050";
-                } else if (estimatedChance >= 40) {
-                    acceptText = "Merchant looks uncertain";
-                    acceptColor = "#D4B054";
-                } else if (estimatedChance >= 20) {
-                    acceptText = "Merchant looks unimpressed";
-                    acceptColor = "#D08030";
-                } else {
-                    acceptText = "Merchant will likely REFUSE";
-                    acceptColor = "#B05050";
-                }
+                std::string acceptText, acceptColor;
+                AcceptanceBand(authChance, acceptText, acceptColor);
 
                 auto html = std::format(
                     R"(<p align="center"><font face="$EverywhereMediumFont" size="10" color="{}">{}</font></p>)",
@@ -499,31 +693,39 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
                 htmlVal.SetString(html.c_str());
                 uiMovie->SetVariable("_root.AcceptanceText.htmlText", htmlVal);
 
-                // Update relationship effect preview
-                std::string effectText;
-                std::string effectColor = "#807060";
-                if (pct < -15) {
-                    effectText = "This offer will worsen your standing";
-                    effectColor = "#B05050";
-                } else if (pct < -5) {
-                    effectText = "This offer may slightly worsen your standing";
-                    effectColor = "#D08030";
-                } else if (pct > 10) {
-                    effectText = "This offer will improve your standing";
-                    effectColor = "#50B050";
-                } else if (pct > 3) {
-                    effectText = "This offer may slightly improve your standing";
-                    effectColor = "#80B050";
-                } else {
-                    effectText = "This offer has little effect on your standing";
-                    effectColor = "#A09080";
+                // Detect that the player has actually moved the slider off its
+                // starting (market) value. Until then we keep the relationship
+                // blurb visible; afterwards we show the live offer-effect preview.
+                if (std::abs(offeredGold - effPrice) >= 0.5) {
+                    sliderTouched = true;
                 }
-                auto effHtml = std::format(
-                    R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="{}">{}</font></p>)",
-                    effectColor, effectText);
-                RE::GFxValue effVal;
-                effVal.SetString(effHtml.c_str());
-                uiMovie->SetVariable("_root.RelEffectText.htmlText", effVal);
+
+                if (sliderTouched) {
+                    std::string effectText;
+                    std::string effectColor = "#807060";
+                    if (pct < -15) {
+                        effectText = "This offer will worsen your standing";
+                        effectColor = "#B05050";
+                    } else if (pct < -5) {
+                        effectText = "This offer may slightly worsen your standing";
+                        effectColor = "#D08030";
+                    } else if (pct > 10) {
+                        effectText = "This offer will improve your standing";
+                        effectColor = "#50B050";
+                    } else if (pct > 3) {
+                        effectText = "This offer may slightly improve your standing";
+                        effectColor = "#80B050";
+                    } else {
+                        effectText = "This offer has little effect on your standing";
+                        effectColor = "#A09080";
+                    }
+                    auto effHtml = std::format(
+                        R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="{}">{}</font></p>)",
+                        effectColor, effectText);
+                    RE::GFxValue effVal;
+                    effVal.SetString(effHtml.c_str());
+                    uiMovie->SetVariable("_root.RelEffectText.htmlText", effVal);
+                }
             }
         }
     }
@@ -682,10 +884,41 @@ RE::UI_MESSAGE_RESULTS BarterOfferMenu::ProcessMessage(RE::UIMessage& a_message)
                     return RE::UI_MESSAGE_RESULTS::kHandled;
                 }
 
-                // Unrecognized event - pass through to SWF for keyboard input handling
+                // Intimidate (offer state) / Re-offer (counter state): readyWeapon = R key / X gamepad
+                if (eventStr == userEvents->readyWeapon) {
+                    if (!showingResult) {
+                        if (showingCounter) {
+                            showingCounter = false;
+                            RestoreOfferUI();
+                            SKSE::GetTaskInterface()->AddTask([]() {
+                                BarterManager::GetSingleton()->OnCounterResponse(1);
+                            });
+                        } else {
+                            inputCooldown = 0.3f;
+                            SKSE::GetTaskInterface()->AddTask([]() {
+                                BarterManager::GetSingleton()->OnIntimidateAttempt();
+                            });
+                        }
+                        return RE::UI_MESSAGE_RESULTS::kHandled;
+                    }
+                }
+
+                // Unrecognized event - consume it to prevent stray inputs from affecting UI
                 gamepadHoldDir = 0;
             }
-            // Let unhandled events pass to the SWF's internal input handler
+            // Consume all user events (don't let them reach the SWF or game)
+            return RE::UI_MESSAGE_RESULTS::kHandled;
+        }
+        case RE::UI_MESSAGE_TYPE::kHide: {
+            // Guard against a stale close. After cancelling an offer we queue a
+            // kHide; if the player immediately selects another item, the menu is
+            // reused for the new offer. Processing that already-queued kHide would
+            // make the freshly opened window blink and vanish. Only honor kHide
+            // when the barter is truly idle.
+            if (BarterManager::GetSingleton()->GetState() != BarterState::Idle) {
+                logger::info("BarterOfferMenu: swallowing stale kHide (state != Idle) to prevent blink");
+                return RE::UI_MESSAGE_RESULTS::kHandled;
+            }
             break;
         }
         default:
@@ -701,6 +934,8 @@ void BarterOfferMenu::SetOfferData(const OfferData& data) {
     }
 
     // Reset all state for a fresh offer
+    currentIsBuying = data.isBuying;
+    relMarkerCurX = -1.0f;  // re-init the meter marker so it eases in from center
     showingCounter = false;
     showingResult = false;
     sliderDragging = false;
@@ -723,9 +958,10 @@ void BarterOfferMenu::SetOfferData(const OfferData& data) {
     args[3].SetString(data.merchantName.c_str());
     args[4].SetString(data.personalityName.c_str());
     args[5].SetNumber(data.relationship);
-    // Slider: min=0, max=effectivePrice*1.5 (allow offering above market for relationship building)
+    // Slider: min=0, max=effectivePrice * kOverMarketCapMult. Allows offering well
+    // above market (when buying) or asking well above market (when selling).
     args[6].SetNumber(0);
-    int maxOffer = static_cast<int>(std::ceil(data.effectivePrice * 1.5));
+    int maxOffer = static_cast<int>(std::ceil(data.effectivePrice * kOverMarketCapMult));
     if (maxOffer < 2) maxOffer = 2;
     args[7].SetNumber(static_cast<double>(maxOffer));
     args[8].SetBoolean(data.hasIntimidationPerk);
@@ -785,90 +1021,94 @@ void BarterOfferMenu::SetOfferData(const OfferData& data) {
 
     setHtml("_root.MerchantName.htmlText",
         makeHtml("$EverywhereBoldFont", 20, "#FFFFFF", data.merchantName));
-    setHtml("_root.FlavorText.htmlText",
-        makeHtml("$EverywhereMediumFont", 10, "#999999", "What did you have in mind?"));
+
+    // Flavor line doubles as the buy/sell mode indicator. If the merchant already
+    // refused a price for this item this session, warn the player here instead.
+    if (data.sessionRejectedPrice > 0) {
+        setHtml("_root.FlavorText.htmlText",
+            std::format(R"(<p align="center"><font face="$EverywhereMediumFont" size="10" color="#C86464">They already refused {} gold for this &#8212; offer more.</font></p>)",
+                data.sessionRejectedPrice));
+    } else {
+        const char* modeWord = data.isBuying ? "Buying" : "Selling";
+        const char* modeColor = data.isBuying ? "#C8A050" : "#7FB0C8";
+        setHtml("_root.FlavorText.htmlText",
+            std::format(R"(<p align="center"><font face="$EverywhereMediumFont" size="10" color="{}">{}</font><font face="$EverywhereMediumFont" size="10" color="#999999"> &#8212; What did you have in mind?</font></p>)",
+                modeColor, modeWord));
+    }
 
     // Base price comparison
     setHtml("_root.BasePriceText.htmlText",
         makeHtml("$EverywhereMediumFont", 9, "#A09080",
             std::format("Market Price: {} gold", data.basePrice)));
 
+    // Offer label clarifies the direction of gold flow. Big + gold so it pops.
     setHtml("_root.OfferLabel.htmlText",
-        makeHtml("$EverywhereMediumFont", 9, "#808080", "Your Offer"));
+        makeHtml("$EverywhereBoldFont", 14, "#E8C878",
+            data.isBuying ? "You Pay" : "You Receive"));
+    // Plain price string; the coin is a placed glyph repositioned by PositionCoin()
+    // (inline <img> is silently dropped by this SWF's GFx build).
     setHtml("_root.PriceText.htmlText",
         makeHtml("$EverywhereBoldFont", 22, "#DAA520",
             std::format("{} gold", static_cast<int>(data.effectivePrice))));
-    int maxOfferDisplay = static_cast<int>(std::ceil(data.effectivePrice * 1.5));
+    {
+        RE::GFxValue showCoin; showCoin.SetBoolean(true);
+        uiMovie->SetVariable("_root.coinIcon._visible", showCoin);
+    }
+    PositionCoin();
+    int maxOfferDisplay = static_cast<int>(std::ceil(data.effectivePrice * kOverMarketCapMult));
     if (maxOfferDisplay < 2) maxOfferDisplay = 2;
     setHtml("_root.SliderText.htmlText",
         makeHtml("$EverywhereMediumFont", 9, "#C8C8C8",
             std::format("0 gold                    {} gold", maxOfferDisplay)));
 
-    // Acceptance chance indicator (colored by likelihood)
+    // Acceptance chance indicator (colored by likelihood, same band as the live preview)
     {
-        std::string acceptText;
-        std::string acceptColor;
-        int chance = static_cast<int>(data.acceptanceChance);
-        if (chance >= 80) {
-            acceptText = "Merchant will ACCEPT this offer";
-            acceptColor = "#50B050";
-        } else if (chance >= 60) {
-            acceptText = "Merchant will likely accept";
-            acceptColor = "#80B050";
-        } else if (chance >= 40) {
-            acceptText = "Merchant looks uncertain";
-            acceptColor = "#D4B054";
-        } else if (chance >= 20) {
-            acceptText = "Merchant looks unimpressed";
-            acceptColor = "#D08030";
-        } else {
-            acceptText = "Merchant will likely REFUSE";
-            acceptColor = "#B05050";
-        }
+        std::string acceptText, acceptColor;
+        AcceptanceBand(data.acceptanceChance, acceptText, acceptColor);
         setHtml("_root.AcceptanceText.htmlText",
             makeHtml("$EverywhereMediumFont", 10, acceptColor.c_str(), acceptText));
     }
 
-    // Relationship section
-    {
-        std::string relText;
-        if (data.relationship >= 60) relText = "Trusted";
-        else if (data.relationship >= 30) relText = "Friendly";
-        else if (data.relationship >= 10) relText = "Warm";
-        else if (data.relationship >= -10) relText = "Neutral";
-        else if (data.relationship >= -30) relText = "Cool";
-        else if (data.relationship >= -60) relText = "Hostile";
-        else relText = "Despised";
+    // Relationship section (verbose: state + personality + descriptive blurb)
+    setHtml("_root.ReactionText.htmlText",
+        std::format(R"(<p align="center"><font face="$EverywhereMediumFont" size="9" color="#A09080">{} merchant  &#183;  Relationship: </font><font face="$EverywhereMediumFont" size="9" color="{}">{}</font></p>)",
+            data.personalityName, RelStateColor(data.relationship), RelStateName(data.relationship)));
 
-        std::string relColor;
-        if (data.relationship >= 30) relColor = "#50B050";
-        else if (data.relationship >= 0) relColor = "#D4B054";
-        else relColor = "#B05050";
+    // Distinct, colored relationship meter (red/yellow/green) with a moving marker.
+    UpdateRelationshipMeter(data.relationship);
 
-        setHtml("_root.ReactionText.htmlText",
-            std::format(R"(<p align="center"><font face="$EverywhereMediumFont" size="9" color="#A09080">{} merchant</font><font face="$EverywhereMediumFont" size="9" color="{}">  |  {}</font></p>)",
-                data.personalityName, relColor, relText));
-    }
-
-    // Relationship bar fill (scale 0-100% where 50% = neutral)
-    {
-        double relNorm = (data.relationship + 100.0) / 200.0 * 100.0; // 0-100 scale
-        if (relNorm < 5.0) relNorm = 5.0;
-        if (relNorm > 95.0) relNorm = 95.0;
-        RE::GFxValue xscale;
-        xscale.SetNumber(relNorm);
-        uiMovie->SetVariable("_root.relBarMC.fill._xscale", xscale);
-    }
-
-    // Relationship effect preview (what this offer at 0% would do)
+    // Descriptive blurb beneath the meter. Stays until the player actually moves
+    // the slider, at which point the live offer-effect preview takes over.
+    sliderTouched = false;
     setHtml("_root.RelEffectText.htmlText",
-        makeHtml("$EverywhereMediumFont", 8, "#807060",
-            "Adjust the slider to see the effect on your standing"));
+        makeHtml("$EverywhereMediumFont", 8, "#9A8C78", RelBlurb(data.relationship)));
 
-    // Button hints (gamepad + keyboard)
-    setHtml("_root.ButtonHintText.htmlText",
-        makeHtml("$EverywhereMediumFont", 8, "#606060",
-            "[E] Confirm    [Tab] Cancel    [LB/RB] +/-5    [D-pad] Adjust"));
+    // Button hints (placed glyph icons reflecting the current input device)
+    ApplyHintCells(0);
+
+    // Intimidate button label: show percent chance directly on the button
+    {
+        float intChance = data.speechBonus / 200.0f;
+        if (data.hasIntimidationPerk) intChance *= 2.0f;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (player) intChance += static_cast<float>(player->GetLevel()) * 0.002f;
+        if (data.personalityName == "Timid") intChance += 0.25f;
+        else if (data.personalityName == "Stern") intChance -= 0.20f;
+        else if (data.personalityName == "Greedy") intChance -= 0.10f;
+        else if (data.personalityName == "Sleazy") intChance += 0.05f;
+        else if (data.personalityName == "Generous") intChance += 0.10f;
+        intChance = std::clamp(intChance, 0.05f, 0.95f);
+        int pct = static_cast<int>(intChance * 100.0f);
+
+        std::string chanceColor = pct >= 60 ? "#66AA66" : (pct >= 35 ? "#AAAA66" : "#AA6666");
+        std::string intLabel = std::format(
+            "<p align='center'><font face='$EverywhereMediumFont' size='10' color='#CC4444'>Intimidate </font>"
+            "<font face='$EverywhereMediumFont' size='9' color='{}'>({}%)</font></p>",
+            chanceColor, pct);
+        RE::GFxValue labelVal;
+        labelVal.SetString(intLabel.c_str());
+        uiMovie->SetVariable("_root.btn_intimidate.lbl.htmlText", labelVal);
+    }
 
     // Deal history synopsis
     {
@@ -931,6 +1171,28 @@ void BarterOfferMenu::SetOfferData(const OfferData& data) {
     logger::info("BarterOfferMenu: SetOfferData applied ({})", data.itemName);
 }
 
+void BarterOfferMenu::UpdateRelationshipMeter(int relationship) {
+    if (!uiMovie) return;
+
+    // Normalize -100..100 to a 0..120px position on the color-zoned track. The bar
+    // background is colored (red -> amber -> green) so the marker's position alone
+    // conveys standing; no growing fill is needed.
+    double relNorm = std::clamp((relationship + 100.0) / 200.0, 0.0, 1.0);
+
+    auto setVar = [this](const char* path, double num) {
+        RE::GFxValue v; v.SetNumber(num);
+        uiMovie->SetVariable(path, v);
+    };
+
+    // The marker sits at the standing position along the 120px track. Animate it:
+    // set the target here; AdvanceMovie eases toward it.
+    relMarkerTargetX = static_cast<float>(relNorm * 120.0);
+    if (relMarkerCurX < 0.0f) {
+        relMarkerCurX = 60.0f;  // start from the neutral midpoint for an intro slide
+    }
+    setVar("_root.relBarMC.marker._x", relMarkerCurX);
+}
+
 void BarterOfferMenu::SetCounterOffer(int amount, int patience) {
     if (!uiMovie) return;
 
@@ -938,17 +1200,7 @@ void BarterOfferMenu::SetCounterOffer(int amount, int patience) {
     showingResult = false;
     inputCooldown = 0.3f;  // Prevent lingering accept from instantly accepting counter
 
-    // Call AS to set state
-    RE::GFxValue args[2];
-    args[0].SetNumber(amount);
-    args[1].SetNumber(patience);
-    uiMovie->Invoke("_root.ShowCounterOffer", nullptr, args, 2);
-
-    RE::GFxValue stateArg;
-    stateArg.SetString("counter");
-    uiMovie->Invoke("_root.setButtonState", nullptr, &stateArg, 1);
-
-    // Hide the ENTIRE barter window (same as result screen)
+    // Hide the ENTIRE barter window FIRST (before any AS invocation that might re-show)
     RE::GFxValue hideVal;
     hideVal.SetBoolean(false);
     uiMovie->SetVariable("_root.panelBG._visible", hideVal);
@@ -966,10 +1218,20 @@ void BarterOfferMenu::SetCounterOffer(int amount, int patience) {
     uiMovie->SetVariable("_root.OfferLabel._visible", hideVal);
     uiMovie->SetVariable("_root.coinIcon._visible", hideVal);
     uiMovie->SetVariable("_root.relBarMC._visible", hideVal);
-    // Hide all counter buttons too (we show hints instead)
+    // Hide offer buttons
+    uiMovie->SetVariable("_root.btn_submit._visible", hideVal);
+    uiMovie->SetVariable("_root.btn_intimidate._visible", hideVal);
+    uiMovie->SetVariable("_root.btn_cancel._visible", hideVal);
+    // Hide counter buttons (hints shown instead)
     uiMovie->SetVariable("_root.btn_accept._visible", hideVal);
     uiMovie->SetVariable("_root.btn_reoffer._visible", hideVal);
     uiMovie->SetVariable("_root.btn_walkaway._visible", hideVal);
+
+    // Call AS to set state (after hiding so it can't re-show arrows)
+    RE::GFxValue args[2];
+    args[0].SetNumber(amount);
+    args[1].SetNumber(patience);
+    uiMovie->Invoke("_root.ShowCounterOffer", nullptr, args, 2);
 
     auto setHtml = [this](const char* fieldPath, const std::string& html) {
         RE::GFxValue val;
@@ -983,34 +1245,35 @@ void BarterOfferMenu::SetCounterOffer(int amount, int patience) {
     uiMovie->SetVariable("_root.PriceText._visible", showVal);
     uiMovie->SetVariable("_root.StatusText._visible", showVal);
     uiMovie->SetVariable("_root.ReactionText._visible", showVal);
-    uiMovie->SetVariable("_root.ButtonHintText._visible", showVal);
 
     // Prominent counter-offer display
     std::string counterHtml = std::format(
         R"(<p align="center"><font face="$EverywhereBoldFont" size="22" color="#FFCC00">Counter: {} gold</font></p>)",
         amount);
+    std::string patienceDesc;
+    if (patience <= 1) {
+        patienceDesc = "Final offer \u2014 the merchant\u2019s patience is spent.";
+    } else if (patience == 2) {
+        patienceDesc = std::format("The merchant is losing patience. ({} attempts remain)", patience);
+    } else {
+        patienceDesc = std::format("The merchant is willing to negotiate further. ({} attempts remain)", patience);
+    }
     std::string patienceHtml = std::format(
-        R"(<p align="center"><font face="$EverywhereMediumFont" size="11" color="#C8C8C8">Patience remaining: {}</font></p>)",
-        patience);
+        R"(<p align="center"><font face="$EverywhereMediumFont" size="11" color="#C8C8C8">{}</font></p>)",
+        patienceDesc);
 
     setHtml("_root.PriceText.htmlText", counterHtml);
     setHtml("_root.StatusText.htmlText",
         R"(<p align="center"><font face="$EverywhereMediumFont" size="12" color="#E0C080">The merchant makes a counter-offer</font></p>)");
     setHtml("_root.ReactionText.htmlText", patienceHtml);
 
-    // Button hints for counter state
-    RE::GFxValue hintVal;
-    if (lastInputWasGamepad) {
-        hintVal.SetString(R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="#606060">[A] Accept    [X] Re-offer    [B] Walk Away</font></p>)");
-    } else {
-        hintVal.SetString(R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="#606060">[E] Accept    [R] Re-offer    [Tab] Walk Away</font></p>)");
-    }
-    uiMovie->SetVariable("_root.ButtonHintText.htmlText", hintVal);
+    // Button hints for counter state (placed glyph icons)
+    ApplyHintCells(1);
 
     logger::info("BarterOfferMenu: SetCounterOffer - {} gold, patience {}", amount, patience);
 }
 
-void BarterOfferMenu::SetResult(bool accepted, int amount) {
+void BarterOfferMenu::SetResult(bool accepted, int goldAmount, int relDelta) {
     if (!uiMovie) return;
 
     showingResult = true;
@@ -1059,33 +1322,59 @@ void BarterOfferMenu::SetResult(bool accepted, int amount) {
     uiMovie->SetVariable("_root.ReactionText._visible", showVal);
 
     if (accepted) {
-        std::string priceHtml = std::format(
-            R"(<p align="center"><font face="$EverywhereBoldFont" size="28" color="#50FF50">ACCEPTED</font></p>)");
-        std::string amountHtml = std::format(
-            R"(<p align="center"><font face="$EverywhereBoldFont" size="20" color="#FFD700">{} gold</font></p>)",
-            amount);
-        std::string subHtml =
-            R"(<p align="center"><font face="$EverywhereMediumFont" size="10" color="#90C890">Deal complete</font></p>)";
+        std::string priceHtml =
+            R"(<p align="center"><font face="$EverywhereBoldFont" size="28" color="#50FF50">ACCEPTED</font></p>)";
+        // Show relationship effect clearly
+        std::string subHtml;
+        if (relDelta > 0) {
+            subHtml = std::format(
+                R"(<p align="center"><font face="$EverywhereMediumFont" size="11" color="#90C890">Relationship improved (+{})</font></p>)",
+                relDelta);
+        } else if (relDelta < 0) {
+            subHtml = std::format(
+                R"(<p align="center"><font face="$EverywhereMediumFont" size="11" color="#C89060">Relationship worsened ({})</font></p>)",
+                relDelta);
+        } else {
+            subHtml =
+                R"(<p align="center"><font face="$EverywhereMediumFont" size="11" color="#A0A090">Standing unchanged</font></p>)";
+        }
 
         setHtml("_root.PriceText.htmlText", priceHtml);
-        setHtml("_root.StatusText.htmlText", amountHtml);
+        // Hide gold amount — just show empty status
+        RE::GFxValue hideStatus;
+        hideStatus.SetBoolean(false);
+        uiMovie->SetVariable("_root.StatusText._visible", hideStatus);
         setHtml("_root.ReactionText.htmlText", subHtml);
+        ApplyHintCells(-1);  // no hints on the accepted screen
     } else {
         std::string priceHtml =
             R"(<p align="center"><font face="$EverywhereBoldFont" size="28" color="#FF5050">REJECTED</font></p>)";
-        std::string relHtml = std::format(
-            R"(<p align="center"><font face="$EverywhereMediumFont" size="12" color="#FF8080">Relationship {}</font></p>)",
-            amount);
-        std::string subHtml;
-        if (lastInputWasGamepad) {
-            subHtml = R"(<p align="center"><font face="$EverywhereMediumFont" size="9" color="#A0A0A0">Press [A] to retry, [B] to cancel</font></p>)";
+        // Relationship change is now chance-based, so the loss may be 0.
+        std::string relHtml;
+        if (relDelta < 0) {
+            relHtml = std::format(
+                R"(<p align="center"><font face="$EverywhereMediumFont" size="12" color="#FF8080">Relationship {}</font></p>)",
+                relDelta);
         } else {
-            subHtml = R"(<p align="center"><font face="$EverywhereMediumFont" size="9" color="#A0A0A0">Press [E] to retry, [Tab] to cancel</font></p>)";
+            relHtml =
+                R"(<p align="center"><font face="$EverywhereMediumFont" size="12" color="#A09080">Relationship unchanged</font></p>)";
+        }
+        // Direction-aware advice
+        std::string noteHtml;
+        if (currentIsBuying) {
+            noteHtml =
+                R"(<p align="center"><font face="$EverywhereMediumFont" size="10" color="#C89060">They won't take that &#8212; offer more to win them over.</font></p>)";
+        } else {
+            noteHtml =
+                R"(<p align="center"><font face="$EverywhereMediumFont" size="10" color="#C89060">They won't pay that much &#8212; lower your asking price.</font></p>)";
         }
 
         setHtml("_root.PriceText.htmlText", priceHtml);
         setHtml("_root.StatusText.htmlText", relHtml);
-        setHtml("_root.ReactionText.htmlText", subHtml);
+        setHtml("_root.ReactionText.htmlText", noteHtml);
+
+        // Show the placed glyph keybind hints (Retry / Cancel) for the result screen.
+        ApplyHintCells(2);
     }
 }
 
@@ -1108,6 +1397,19 @@ void BarterOfferMenu::RestoreOfferUI() {
     RE::GFxValue stateArg;
     stateArg.SetString("offer");
     uiMovie->Invoke("_root.setButtonState", nullptr, &stateArg, 1);
+
+    // Force buttons visible from C++ (AS setButtonState is unreliable in this GFx build)
+    RE::GFxValue trueVal;
+    trueVal.SetBoolean(true);
+    uiMovie->SetVariable("_root.btn_submit._visible", trueVal);
+    uiMovie->SetVariable("_root.btn_intimidate._visible", trueVal);
+    uiMovie->SetVariable("_root.btn_cancel._visible", trueVal);
+    RE::GFxValue falseVal;
+    falseVal.SetBoolean(false);
+    uiMovie->SetVariable("_root.btn_accept._visible", falseVal);
+    uiMovie->SetVariable("_root.btn_reoffer._visible", falseVal);
+    uiMovie->SetVariable("_root.btn_walkaway._visible", falseVal);
+    uiMovie->SetVariable("_root.btn_continue._visible", falseVal);
 
     // Show elements that were hidden during counter/result
     RE::GFxValue showVal;
@@ -1132,7 +1434,6 @@ void BarterOfferMenu::RestoreOfferUI() {
     uiMovie->SetVariable("_root.AcceptanceText._visible", showVal);
     uiMovie->SetVariable("_root.RelEffectText._visible", showVal);
     uiMovie->SetVariable("_root.DealHistoryText._visible", showVal);
-    uiMovie->SetVariable("_root.ButtonHintText._visible", showVal);
 
     // Clear result/counter-specific text
     RE::GFxValue emptyVal;
@@ -1159,15 +1460,10 @@ void BarterOfferMenu::RestoreOfferUI() {
 
     // Restore price display from current slider value
     uiMovie->Invoke("_root.updateSliderDisplay", nullptr, nullptr, 0);
+    PositionCoin();
 
-    // Restore input hints for offer state
-    RE::GFxValue hintVal;
-    if (lastInputWasGamepad) {
-        hintVal.SetString(R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="#606060">[A] Confirm    [B] Cancel    [LB/RB] +/-5    [D-pad] Adjust</font></p>)");
-    } else {
-        hintVal.SetString(R"(<p align="center"><font face="$EverywhereMediumFont" size="8" color="#606060">[E] Confirm    [Tab] Cancel    [LB/RB] +/-5    [Arrow Keys] Adjust</font></p>)");
-    }
-    uiMovie->SetVariable("_root.ButtonHintText.htmlText", hintVal);
+    // Restore input hints for offer state (placed glyph icons)
+    ApplyHintCells(0);
 
     logger::info("BarterOfferMenu: RestoreOfferUI - back to offer state");
 }
@@ -1255,13 +1551,13 @@ void ScaleformUIImpl::ShowCounterOffer(int counterAmount, int patience) {
     });
 }
 
-void ScaleformUIImpl::ShowResult(bool accepted, int relDelta) {
-    SKSE::GetTaskInterface()->AddUITask([accepted, relDelta]() {
+void ScaleformUIImpl::ShowResult(bool accepted, int goldAmount, int relDelta) {
+    SKSE::GetTaskInterface()->AddUITask([accepted, goldAmount, relDelta]() {
         auto* ui = RE::UI::GetSingleton();
         if (ui) {
             auto menu = ui->GetMenu<BarterOfferMenu>(BarterOfferMenu::MENU_NAME);
             if (menu) {
-                menu->SetResult(accepted, relDelta);
+                menu->SetResult(accepted, goldAmount, relDelta);
             }
         }
     });

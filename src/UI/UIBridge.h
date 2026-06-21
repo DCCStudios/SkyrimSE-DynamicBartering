@@ -9,7 +9,7 @@ public:
     virtual bool Initialize() = 0;
     virtual void ShowOffer(const OfferData& data) = 0;
     virtual void ShowCounterOffer(int counterAmount, int patience) = 0;
-    virtual void ShowResult(bool accepted, int relDelta) = 0;
+    virtual void ShowResult(bool accepted, int goldAmount, int relDelta) = 0;
     virtual void Hide() = 0;
     virtual bool IsAvailable() const = 0;
 };
@@ -25,7 +25,7 @@ public:
     void SwitchMode(UIMode newMode);
     void ShowOffer(const OfferData& data);
     void ShowCounterOffer(int counterAmount, int patience);
-    void ShowResult(bool accepted, int relDelta);
+    void ShowResult(bool accepted, int goldAmount, int relDelta);
     void Hide();
 
     IBarterUI* GetActiveUI() const { return activeUI; }

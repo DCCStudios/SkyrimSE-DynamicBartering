@@ -1,6 +1,7 @@
 #pragma once
 
 enum class UIMode : int { Auto = 0, ScaleformSWF = 1, PrismaUI = 2 };
+enum class GamepadIconStyle : int { Xbox = 0, PlayStation = 1 };
 
 class Settings {
 public:
@@ -17,6 +18,7 @@ public:
     UIMode uiMode = UIMode::ScaleformSWF;
     bool showAcceptanceHint = true;
     bool showRelationshipPreview = true;
+    GamepadIconStyle gamepadIconStyle = GamepadIconStyle::Xbox;  // controller glyph set for keybind hints
     int popupDelayMs = 200;
     bool skipBelowThreshold = false;
     int valueThreshold = 50;

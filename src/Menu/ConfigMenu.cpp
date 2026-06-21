@@ -164,6 +164,31 @@ void ConfigMenu::RenderGeneralTab() {
             s->uiMode == UIMode::ScaleformSWF ? "SWF" :
             s->uiMode == UIMode::PrismaUI ? "PrismaUI" : "Auto");
     }
+
+    if (ImGui_Separator) ImGui_Separator();
+    if (ImGui_Text) ImGui_Text("Controller Glyphs");
+
+    if (ImGui_Combo) {
+        static int iconStyleIdx = static_cast<int>(s->gamepadIconStyle);
+        static const char* iconStyleItems[] = { "Xbox", "PlayStation" };
+        if (ImGui_Combo("Gamepad Icon Style", &iconStyleIdx, iconStyleItems, 2, 2)) {
+            s->gamepadIconStyle = static_cast<GamepadIconStyle>(iconStyleIdx);
+            s->Save();
+        }
+    } else if (ImGui_Button) {
+        if (ImGui_Text) {
+            ImGui_Text("Gamepad Icons: %s",
+                s->gamepadIconStyle == GamepadIconStyle::PlayStation ? "PlayStation" : "Xbox");
+        }
+        if (ImGui_Button("Use Xbox", 0)) {
+            s->gamepadIconStyle = GamepadIconStyle::Xbox;
+            s->Save();
+        }
+        if (ImGui_Button("Use PlayStation", 0)) {
+            s->gamepadIconStyle = GamepadIconStyle::PlayStation;
+            s->Save();
+        }
+    }
 }
 
 void ConfigMenu::RenderPricingTab() {

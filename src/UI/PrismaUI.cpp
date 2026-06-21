@@ -1,6 +1,8 @@
 #include "PCH.h"
 #include "UI/PrismaUI.h"
 #include "BarterManager.h"
+#include "UI/ScaleformUI.h"
+#include "Settings.h"
 
 bool PrismaUIImpl::Initialize() {
     auto pluginHandle = GetModuleHandle(L"PrismaUI.dll");
@@ -74,7 +76,9 @@ void PrismaUIImpl::ShowOffer(const OfferData& data) {
         {"sliderMin", data.sliderMin},
         {"sliderMax", data.sliderMax},
         {"acceptanceChance", data.acceptanceChance},
-        {"priceJackMult", data.priceJackMult}
+        {"priceJackMult", data.priceJackMult},
+        {"gamepad", InputDeviceSink::GetSingleton()->IsUsingGamepad()},
+        {"iconStyle", Settings::GetSingleton()->gamepadIconStyle == GamepadIconStyle::PlayStation ? "ps" : "xbox"}
     };
 
     std::string payload = j.dump();
@@ -102,10 +106,10 @@ void PrismaUIImpl::ShowCounterOffer(int counterAmount, int patience) {
     api->InteropCall(view, "ShowCounter", j.dump().c_str());
 }
 
-void PrismaUIImpl::ShowResult(bool accepted, int relDelta) {
+void PrismaUIImpl::ShowResult(bool accepted, int goldAmount, int relDelta) {
     if (!api || !view) return;
 
-    nlohmann::json j = {{"accepted", accepted}, {"relDelta", relDelta}};
+    nlohmann::json j = {{"accepted", accepted}, {"goldAmount", goldAmount}, {"relDelta", relDelta}};
     api->InteropCall(view, "ShowResult", j.dump().c_str());
 }
 

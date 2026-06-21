@@ -136,8 +136,14 @@ public:
 
     void SetOfferData(const struct OfferData& data);
     void SetCounterOffer(int amount, int patience);
-    void SetResult(bool accepted, int amount);
+    void SetResult(bool accepted, int goldAmount, int relDelta);
     void RestoreOfferUI();
+    void UpdateRelationshipMeter(int relationship);
+    // Toggle the placed keybind-glyph hint row for the given state
+    // (0=offer, 1=counter, 2=result) based on the active input device.
+    void ApplyHintCells(int state);
+    // Reposition the standalone coin glyph so it hugs the (centered) price number.
+    void PositionCoin();
 
     static inline std::optional<OfferData> pendingOfferData;
 
@@ -162,7 +168,12 @@ private:
     bool showingResult{ false };
     bool showingCounter{ false };
     bool lastResultAccepted{ false };
+    bool sliderTouched{ false };  // player has moved the slider off its market start
+    bool currentIsBuying{ true }; // direction of the active offer (affects standing preview)
     float inputCooldown{ 0.0f };  // Prevents activation key from immediately submitting
+    // Relationship-meter marker animation (eased toward target, like the slider handle).
+    float relMarkerTargetX{ 60.0f };
+    float relMarkerCurX{ -1.0f };  // -1 = uninitialized (snaps to a centered intro start)
 };
 
 class ScaleformUIImpl : public IBarterUI {
@@ -170,7 +181,7 @@ public:
     bool Initialize() override;
     void ShowOffer(const OfferData& data) override;
     void ShowCounterOffer(int counterAmount, int patience) override;
-    void ShowResult(bool accepted, int relDelta) override;
+    void ShowResult(bool accepted, int goldAmount, int relDelta) override;
     void Hide() override;
     bool IsAvailable() const override { return true; }
 };

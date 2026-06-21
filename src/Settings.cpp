@@ -22,6 +22,7 @@ void Settings::Load() {
     uiMode = static_cast<UIMode>(ini.GetLongValue("General", "iUIMode", static_cast<int>(uiMode)));
     showAcceptanceHint = ini.GetBoolValue("General", "bShowAcceptanceHint", showAcceptanceHint);
     showRelationshipPreview = ini.GetBoolValue("General", "bShowRelationshipPreview", showRelationshipPreview);
+    gamepadIconStyle = static_cast<GamepadIconStyle>(ini.GetLongValue("General", "iGamepadIconStyle", static_cast<int>(gamepadIconStyle)));
     popupDelayMs = static_cast<int>(ini.GetLongValue("General", "iPopupDelayMs", popupDelayMs));
     skipBelowThreshold = ini.GetBoolValue("General", "bSkipBelowThreshold", skipBelowThreshold);
     valueThreshold = static_cast<int>(ini.GetLongValue("General", "iValueThreshold", valueThreshold));
@@ -72,6 +73,7 @@ void Settings::Save() {
     ini.SetLongValue("General", "iUIMode", static_cast<int>(uiMode));
     ini.SetBoolValue("General", "bShowAcceptanceHint", showAcceptanceHint);
     ini.SetBoolValue("General", "bShowRelationshipPreview", showRelationshipPreview);
+    ini.SetLongValue("General", "iGamepadIconStyle", static_cast<int>(gamepadIconStyle));
     ini.SetLongValue("General", "iPopupDelayMs", popupDelayMs);
     ini.SetBoolValue("General", "bSkipBelowThreshold", skipBelowThreshold);
     ini.SetLongValue("General", "iValueThreshold", valueThreshold);

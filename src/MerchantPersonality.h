@@ -1,7 +1,7 @@
 #pragma once
 
 struct MerchantPersonality {
-    enum class Trait { Greedy, Fair, Generous, Sleazy };
+    enum class Trait { Greedy, Fair, Generous, Sleazy, Stern, Timid };
 
     Trait trait = Trait::Fair;
     float acceptanceMod = 0.0f;
