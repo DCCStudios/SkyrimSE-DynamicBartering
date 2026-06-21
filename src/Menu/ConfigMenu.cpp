@@ -62,11 +62,11 @@ void ConfigMenu::Register() {
 }
 
 void ConfigMenu::RenderMenu() {
-    // The SKSE Menu Framework will call this with ImGui context already set up
-    // We use the exported ImGui functions from the framework DLL
-
     auto menuFramework = GetModuleHandle(L"SKSEMenuFramework");
     if (!menuFramework) return;
+
+    // Reset relationship tab tracking each frame; RenderRelationshipsTab sets it true
+    relationshipsTabActive = false;
 
     auto ImGui_BeginTabBar = reinterpret_cast<ImGui_BeginTabBar_t>(GetProcAddress(menuFramework, "igBeginTabBar"));
     auto ImGui_EndTabBar = reinterpret_cast<ImGui_EndTabBar_t>(GetProcAddress(menuFramework, "igEndTabBar"));
@@ -81,6 +81,10 @@ void ConfigMenu::RenderMenu() {
     if (ImGui_BeginTabBar("DynBarterTabs", 0)) {
         if (ImGui_BeginTabItem && ImGui_BeginTabItem("General", nullptr, 0)) {
             RenderGeneralTab();
+            if (ImGui_EndTabItem) ImGui_EndTabItem();
+        }
+        if (ImGui_BeginTabItem && ImGui_BeginTabItem("Cart", nullptr, 0)) {
+            RenderCartTab();
             if (ImGui_EndTabItem) ImGui_EndTabItem();
         }
         if (ImGui_BeginTabItem && ImGui_BeginTabItem("Pricing", nullptr, 0)) {
@@ -191,6 +195,56 @@ void ConfigMenu::RenderGeneralTab() {
     }
 }
 
+void ConfigMenu::RenderCartTab() {
+    auto menuFramework = GetModuleHandle(L"SKSEMenuFramework");
+    if (!menuFramework) return;
+
+    auto ImGui_SliderFloat = reinterpret_cast<ImGui_SliderFloat_t>(GetProcAddress(menuFramework, "igSliderFloat"));
+    auto ImGui_Text = reinterpret_cast<ImGui_Text_t>(GetProcAddress(menuFramework, "igText"));
+    auto ImGui_Separator = reinterpret_cast<ImGui_Separator_t>(GetProcAddress(menuFramework, "igSeparator"));
+    auto ImGui_Button = reinterpret_cast<ImGui_Button_t>(GetProcAddress(menuFramework, "igButton"));
+    auto ImGui_Checkbox = reinterpret_cast<ImGui_Checkbox_t>(GetProcAddress(menuFramework, "igCheckbox"));
+
+    auto* s = Settings::GetSingleton();
+    if (!s) return;
+
+    if (ImGui_Text) {
+        ImGui_Text("Hold the Barter key/button to negotiate the whole cart.");
+        ImGui_Text("Tap it to add/remove the highlighted item.");
+    }
+    if (ImGui_Separator) ImGui_Separator();
+
+    if (ImGui_SliderFloat) {
+        ImGui_SliderFloat("Hold Threshold (sec)", &s->cartHoldThreshold, 0.2f, 1.5f, "%.2f", 0);
+    }
+
+    if (ImGui_Separator) ImGui_Separator();
+    if (ImGui_Text) {
+        ImGui_Text("Cart Window Position (stage is ~1280 x 720)");
+        ImGui_Text("Changes apply live while the barter menu is open.");
+    }
+
+    if (ImGui_SliderFloat) {
+        // Allow a little overscan past the stage so the panel can be tucked anywhere.
+        ImGui_SliderFloat("Position X", &s->cartPanelX, -100.0f, 1280.0f, "%.0f", 0);
+        ImGui_SliderFloat("Position Y", &s->cartPanelY, -100.0f, 720.0f, "%.0f", 0);
+        ImGui_SliderFloat("Scale", &s->cartPanelScale, 0.5f, 1.5f, "%.2f", 0);
+    }
+
+    if (ImGui_Separator) ImGui_Separator();
+    if (ImGui_Button) {
+        if (ImGui_Button("Reset Position", 0)) {
+            s->cartPanelX = 596.0f;
+            s->cartPanelY = 110.0f;
+            s->cartPanelScale = 1.0f;
+        }
+        if (ImGui_Button("Save Cart Settings", 0)) {
+            s->Save();
+        }
+    }
+    if (ImGui_Text) ImGui_Text("Tip: use Save to keep position across sessions.");
+}
+
 void ConfigMenu::RenderPricingTab() {
     auto menuFramework = GetModuleHandle(L"SKSEMenuFramework");
     if (!menuFramework) return;
@@ -233,6 +287,15 @@ void ConfigMenu::RenderRelationshipsTab() {
     auto* s = Settings::GetSingleton();
     if (!s) return;
 
+    // Reload data once when tab becomes active (transition from inactive -> active)
+    bool justOpened = !relationshipsTabActive;
+    relationshipsTabActive = true;
+    if (justOpened) {
+        RelationshipManager::GetSingleton()->LoadData();
+    }
+
+    // --- Relationship Settings ---
+    if (ImGui_Text) ImGui_Text("== Relationship Settings ==");
     if (ImGui_Checkbox) {
         ImGui_Checkbox("Relationship Affects Prices", &s->relationshipPricing);
     }
@@ -253,18 +316,90 @@ void ConfigMenu::RenderRelationshipsTab() {
     }
 
     if (ImGui_Separator) ImGui_Separator();
-    if (ImGui_Text) ImGui_Text("Merchant Data:");
+    if (ImGui_Text) ImGui_Text("== Merchant Relationships (from co-save) ==");
+    if (ImGui_Text) ImGui_Text("Adjust relationships below. Changes auto-save.");
 
-    auto& allData = RelationshipManager::GetSingleton()->GetAllData();
-    for (const auto& [id, mem] : allData) {
-        if (ImGui_Text) {
-            ImGui_Text("  %s: Rel=%d Deals=%d", mem.merchantName.c_str(), mem.relationship, mem.totalDeals);
+    auto* relMgr = RelationshipManager::GetSingleton();
+    auto& allData = relMgr->GetAllData();
+
+    if (allData.empty()) {
+        if (ImGui_Text) ImGui_Text("  (No merchants interacted with yet)");
+    } else {
+        // Track changes so we can save at the end
+        bool anyChanged = false;
+
+        // Sort merchants by name for display stability
+        std::vector<std::pair<RE::FormID, const MerchantMemory*>> sorted;
+        sorted.reserve(allData.size());
+        for (const auto& [id, mem] : allData) {
+            sorted.push_back({id, &mem});
+        }
+        std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
+            return a.second->merchantName < b.second->merchantName;
+        });
+
+        for (const auto& [id, memPtr] : sorted) {
+            const auto& mem = *memPtr;
+            if (ImGui_Separator) ImGui_Separator();
+
+            // Label with name, FormID, and stats
+            if (ImGui_Text) {
+                const char* relLabel =
+                    mem.relationship >= 50 ? "Trusted" :
+                    mem.relationship >= 20 ? "Warm" :
+                    mem.relationship >= 5  ? "Friendly" :
+                    mem.relationship >= -5 ? "Neutral" :
+                    mem.relationship >= -20 ? "Cool" :
+                    mem.relationship >= -50 ? "Hostile" : "Despised";
+
+                ImGui_Text("%s [0x%08X] - %s (%d)",
+                    mem.merchantName.c_str(), id, relLabel, mem.relationship);
+                ImGui_Text("  Deals: %d | Accepted: %d | Lowballs: %d",
+                    mem.totalDeals, mem.acceptedDeals, mem.lowballCount);
+            }
+
+            // Editable relationship slider
+            if (ImGui_SliderInt) {
+                // Need a unique label per slider for ImGui
+                char sliderLabel[128];
+                snprintf(sliderLabel, sizeof(sliderLabel), "##rel_%08X", id);
+                int relValue = mem.relationship;
+                int relMin = s->relMin;
+                int relMax = s->relMax;
+                if (ImGui_SliderInt(sliderLabel, &relValue, relMin, relMax, "%d", 0)) {
+                    relMgr->SetRelationship(id, relValue);
+                    anyChanged = true;
+                }
+            }
+
+            // Reset button per merchant
+            if (ImGui_Button) {
+                char btnLabel[128];
+                snprintf(btnLabel, sizeof(btnLabel), "Reset##%08X", id);
+                if (ImGui_Button(btnLabel, 0)) {
+                    relMgr->ResetMerchant(id);
+                    anyChanged = true;
+                }
+            }
+        }
+
+        if (anyChanged) {
+            relMgr->SaveData();
         }
     }
 
+    if (ImGui_Separator) ImGui_Separator();
+
     if (ImGui_Button) {
         if (ImGui_Button("Reset All Relationships", 0)) {
-            RelationshipManager::GetSingleton()->ResetAll();
+            relMgr->ResetAll();
+            relMgr->SaveData();
+        }
+        if (ImGui_Button("Reload from Co-Save", 0)) {
+            relMgr->LoadData();
+        }
+        if (ImGui_Button("Save Settings", 0)) {
+            s->Save();
         }
     }
 }

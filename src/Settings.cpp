@@ -27,6 +27,12 @@ void Settings::Load() {
     skipBelowThreshold = ini.GetBoolValue("General", "bSkipBelowThreshold", skipBelowThreshold);
     valueThreshold = static_cast<int>(ini.GetLongValue("General", "iValueThreshold", valueThreshold));
 
+    // Cart
+    cartHoldThreshold = static_cast<float>(ini.GetDoubleValue("Cart", "fHoldThreshold", cartHoldThreshold));
+    cartPanelX = static_cast<float>(ini.GetDoubleValue("Cart", "fPanelX", cartPanelX));
+    cartPanelY = static_cast<float>(ini.GetDoubleValue("Cart", "fPanelY", cartPanelY));
+    cartPanelScale = static_cast<float>(ini.GetDoubleValue("Cart", "fPanelScale", cartPanelScale));
+
     // Pricing
     sliderRangeMin = static_cast<float>(ini.GetDoubleValue("Pricing", "fSliderRangeMin", sliderRangeMin));
     sliderRangeMax = static_cast<float>(ini.GetDoubleValue("Pricing", "fSliderRangeMax", sliderRangeMax));
@@ -77,6 +83,12 @@ void Settings::Save() {
     ini.SetLongValue("General", "iPopupDelayMs", popupDelayMs);
     ini.SetBoolValue("General", "bSkipBelowThreshold", skipBelowThreshold);
     ini.SetLongValue("General", "iValueThreshold", valueThreshold);
+
+    // Cart
+    ini.SetDoubleValue("Cart", "fHoldThreshold", cartHoldThreshold);
+    ini.SetDoubleValue("Cart", "fPanelX", cartPanelX);
+    ini.SetDoubleValue("Cart", "fPanelY", cartPanelY);
+    ini.SetDoubleValue("Cart", "fPanelScale", cartPanelScale);
 
     // Pricing
     ini.SetDoubleValue("Pricing", "fSliderRangeMin", sliderRangeMin);

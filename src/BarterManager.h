@@ -44,6 +44,18 @@ public:
     // baseValue is the TOTAL vanilla market price for `amount` units (so the whole
     // negotiation is in total-gold terms). amount is the quantity selected (>=1).
     void StartOffer(RE::TESBoundObject* item, int baseValue, bool isBuying, bool isStolen, int amount = 1);
+    void StartCartOffer();  // Cart-wide negotiation over CartManager's net
+
+    // Immediately buy/sell a single item at its market price (no negotiation), by
+    // selecting its row and replaying the vanilla ItemSelect. Used by the cart
+    // "quick buy/sell" popup when the player activates an item already in the cart.
+    void QuickTransferMarket(RE::FormID formID, int count, bool isBuying, int unitPrice);
+
+    // Apply the same chance-based standing change a market-price deal grants in the
+    // offer window (genRatio == 1.0), for a one-off quick/insta transaction, and
+    // surface the result through the vanilla corner-notification system. Uses the
+    // session merchant (set on barter open).
+    void ApplyQuickDealRelationship();
     void OnPlayerOffer(int offeredPrice);
     void OnCounterResponse(int response);  // 0=accept, 1=re-offer, 2=walk away
     void OnIntimidateAttempt();
@@ -84,6 +96,7 @@ private:
     int RollRelationshipChange(float chancePercent, int delta, const char* reason);
 
     void TransferItemAndGold(int finalPrice);
+    void TransferCart(int finalNetPrice);  // Multi-item transfer loop
     static void RefreshBarterMenu(RE::FormID itemID);
     bool ValidateGoldBalance(int amount, bool playerPays) const;
     void ResetDebugForceFlags();
@@ -102,6 +115,7 @@ private:
     int currentAmount = 1;            // quantity being transacted (stacks)
     int patienceRemaining = 3;
     int currentCounterAmount = 0;
+    bool isCartMode = false;           // true when negotiating a cart-wide offer
 
     // Per-session memory of refused prices, keyed by item FormID. Cleared when the
     // barter menu opens/closes. If the player re-offers at/under a refused price for

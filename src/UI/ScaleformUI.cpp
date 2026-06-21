@@ -177,7 +177,6 @@ void BarterOfferMenu::Hide() {
     if (msgQ) {
         msgQ->AddMessage(MENU_NAME, RE::UI_MESSAGE_TYPE::kHide, nullptr);
     }
-    Hooks::interceptingTransaction = false;
 }
 
 void BarterOfferMenu::ApplyHintCells(int state) {

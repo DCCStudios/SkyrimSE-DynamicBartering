@@ -7,15 +7,25 @@ CounterOfferResult CounterOffer::Calculate(
     int merchantPrice,
     int relationship,
     const MerchantPersonality& personality,
-    int currentPatience
+    int currentPatience,
+    bool isBuying
 ) {
     CounterOfferResult result;
     auto* settings = Settings::GetSingleton();
 
-    // If player is offering at or above market price, non-greedy merchants accept gladly
-    float offerRatio = (merchantPrice > 0)
-        ? static_cast<float>(playerOffer) / static_cast<float>(merchantPrice)
-        : 1.0f;
+    // merchantFavor measures how good the offer is *for the merchant* relative to
+    // market, so the willCounter logic reads identically in both directions:
+    //   buying  -> paying MORE is better for the merchant -> offer / market
+    //   selling -> being paid LESS is better for the merchant -> market / offer
+    // >= 1.0 means the offer already favours the merchant (they accept gladly);
+    // < 1.0 means the player is asking for a deal in their own favour.
+    float merchantFavor = 1.0f;
+    if (merchantPrice > 0 && playerOffer > 0) {
+        merchantFavor = isBuying
+            ? static_cast<float>(playerOffer) / static_cast<float>(merchantPrice)
+            : static_cast<float>(merchantPrice) / static_cast<float>(playerOffer);
+    }
+    float offerRatio = merchantFavor;
 
     if (offerRatio >= 1.0f && personality.trait != MerchantPersonality::Trait::Greedy) {
         result.willCounter = false;
@@ -59,13 +69,32 @@ CounterOfferResult CounterOffer::Calculate(
             split = std::clamp(split, 0.3f, 0.7f);
         }
 
-        int gap = merchantPrice - playerOffer;
-        if (gap <= 0) {
-            // Player offered above market — greedy merchant wants even more
-            result.counterAmount = playerOffer + static_cast<int>(merchantPrice * 0.1f);
+        // The counter always lands between the player's offer and market, with
+        // `split` controlling how far toward market. The direction differs:
+        //   buying  -> counter is HIGHER than the offer (merchant wants more gold)
+        //   selling -> counter is LOWER than the offer (merchant pays you less)
+        if (isBuying) {
+            int gap = merchantPrice - playerOffer;
+            if (gap <= 0) {
+                // Player already offered at/above market — greedy merchant wants more.
+                result.counterAmount = playerOffer + static_cast<int>(merchantPrice * 0.1f);
+            } else {
+                result.counterAmount = playerOffer + static_cast<int>(gap * split);
+                result.counterAmount = std::max(result.counterAmount, playerOffer + 1);
+            }
         } else {
-            result.counterAmount = playerOffer + static_cast<int>(gap * split);
-            result.counterAmount = std::max(result.counterAmount, playerOffer + 1);
+            // Selling: the player asked for `playerOffer`; the merchant counters
+            // by offering to pay LESS, moving down toward the market value.
+            int gap = playerOffer - merchantPrice;
+            if (gap <= 0) {
+                // Player already asked at/below market — greedy merchant pays even less.
+                result.counterAmount = playerOffer - static_cast<int>(merchantPrice * 0.1f);
+            } else {
+                result.counterAmount = playerOffer - static_cast<int>(gap * split);
+                result.counterAmount = std::min(result.counterAmount, playerOffer - 1);
+            }
+            // Never counter with a non-positive (or negative) payout.
+            result.counterAmount = std::max(result.counterAmount, 1);
         }
 
         result.patienceRemaining = currentPatience - 1;

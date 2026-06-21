@@ -3,6 +3,7 @@ set(headers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Settings.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Hooks.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BarterManager.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/CartManager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PriceCalculator.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RelationshipManager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MerchantPersonality.h
@@ -13,6 +14,7 @@ set(headers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/UI/UIBridge.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/UI/ScaleformUI.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/UI/PrismaUI.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/UI/BarterCartMenu.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Menu/ConfigMenu.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Menu/SKSEMenuFramework.h
 )

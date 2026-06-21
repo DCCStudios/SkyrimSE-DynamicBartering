@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "BarterManager.h"
+#include "CartManager.h"
 #include "RelationshipManager.h"
 #include "PriceJack.h"
 #include "Settings.h"
@@ -15,9 +16,11 @@ void BarterManager::OnBarterMenuCreated(RE::BarterMenu* menu) {
 void BarterManager::OnBarterOpen() {
     state = BarterState::Idle;
     barterActive = true;
+    isCartMode = false;
     currentMerchant = nullptr;
     currentMerchantID = 0;
     sessionRejections.clear();
+    CartManager::GetSingleton()->Clear();
 
     auto* player = RE::PlayerCharacter::GetSingleton();
     if (!player) return;
@@ -57,11 +60,13 @@ void BarterManager::OnBarterClose() {
     }
     state = BarterState::Idle;
     barterActive = false;
+    isCartMode = false;
     currentMerchant = nullptr;
     currentMerchantID = 0;
     currentItem = nullptr;
     currentItemID = 0;
     sessionRejections.clear();
+    CartManager::GetSingleton()->Clear();
     RelationshipManager::GetSingleton()->SaveData();
 }
 
@@ -133,6 +138,75 @@ void BarterManager::StartOffer(RE::TESBoundObject* item, int baseValue, bool isB
     // exact same context the real decision will use, so the verdict is consistent.
     data.acceptanceChance = PriceCalculator::CalculateAcceptanceChance(
         BuildAcceptanceContext(priceResult.effectivePrice));
+
+    state = BarterState::ShowingOffer;
+    UIBridge::GetSingleton()->ShowOffer(data);
+    state = BarterState::WaitingForPlayer;
+}
+
+void BarterManager::StartCartOffer() {
+    if (!currentMerchant) return;
+    auto* settings = Settings::GetSingleton();
+    if (!settings->modEnabled) return;
+
+    auto* cart = CartManager::GetSingleton();
+    if (cart->IsEmpty()) return;
+
+    isCartMode = true;
+    currentItem = nullptr;
+    currentItemID = 0;
+    currentAmount = 1;
+
+    int netAmount = cart->GetNetAmount();
+    int buySubtotal = cart->GetBuySubtotal();
+    int sellSubtotal = cart->GetSellSubtotal();
+    bool netIsBuying = (netAmount >= 0);
+
+    currentIsBuying = netIsBuying;
+    currentIsStolen = false;
+    currentBasePrice = std::abs(netAmount);
+    currentEffectivePrice = std::abs(netAmount);
+
+    auto& memory = RelationshipManager::GetSingleton()->GetOrCreate(
+        currentMerchantID, currentMerchant->GetName() ? currentMerchant->GetName() : "Unknown");
+
+    OfferData data;
+    data.itemName = "Cart (" + std::to_string(cart->Count()) + " items)";
+    data.basePrice = currentBasePrice;
+    data.effectivePrice = currentEffectivePrice;
+    data.isBuying = netIsBuying;
+    data.sessionRejectedPrice = 0;
+    data.merchantName = currentMerchant->GetName() ? currentMerchant->GetName() : "Unknown";
+    data.personalityName = MerchantPersonality::TraitToString(cachedPersonality.trait);
+    data.relationship = memory.relationship;
+    data.speechBonus = (cachedSpeech / 100.0f) * settings->speechWeight;
+    data.hasIntimidationPerk = cachedPerks.hasIntimidation;
+    data.sliderMin = settings->sliderRangeMin;
+    data.sliderMax = settings->sliderRangeMax;
+    data.priceJackMult = 1.0f;
+
+    std::string perks;
+    if (cachedPerks.hagglingRank > 0) perks += "Haggling " + std::to_string(cachedPerks.hagglingRank) + " ";
+    if (cachedPerks.hasAllure) perks += "Allure ";
+    if (cachedPerks.hasPersuasion) perks += "Persuasion ";
+    if (cachedPerks.hasIntimidation) perks += "Intimidation ";
+    if (cachedPerks.hasInvestor) perks += "Investor ";
+    if (cachedPerks.hasFence) perks += "Fence ";
+    if (cachedPerks.hasMasterTrader) perks += "Master Trader ";
+    data.perkSummary = perks;
+
+    nlohmann::json dealsJson = nlohmann::json::array();
+    for (const auto& d : memory.recentDeals) {
+        dealsJson.push_back(d.ToJson());
+    }
+    data.recentDealsJson = dealsJson.dump();
+
+    data.acceptanceChance = PriceCalculator::CalculateAcceptanceChance(
+        BuildAcceptanceContext(currentEffectivePrice));
+
+    logger::info("StartCartOffer: {} items, buy={}, sell={}, net={} ({})",
+        cart->Count(), buySubtotal, sellSubtotal, netAmount,
+        netIsBuying ? "player pays" : "player receives");
 
     state = BarterState::ShowingOffer;
     UIBridge::GetSingleton()->ShowOffer(data);
@@ -230,6 +304,24 @@ int BarterManager::RollRelationshipChange(float chancePercent, int delta, const 
     return 0;
 }
 
+void BarterManager::ApplyQuickDealRelationship() {
+    if (!Settings::GetSingleton()->modEnabled) return;
+    if (currentMerchantID == 0) return;
+
+    // Mirror the offer window's market-price outcome (genRatio == 1.0 ->
+    // "deal at/above market"): 65% chance of +2 standing. RollRelationshipChange
+    // keys off currentMerchantID, which is valid for the whole barter session.
+    const int delta = RollRelationshipChange(65.0f, 2, "quick deal at market");
+    if (delta == 0) return;  // roll missed -> no change, so no notification
+
+    const char* mname = currentMerchant ? currentMerchant->GetName() : nullptr;
+    std::string merchant = (mname && *mname) ? mname : "The merchant";
+    std::string msg = (delta > 0)
+        ? merchant + " appreciates your business. (Standing +" + std::to_string(delta) + ")"
+        : merchant + " resents the deal. (Standing " + std::to_string(delta) + ")";
+    RE::DebugNotification(msg.c_str());
+}
+
 void BarterManager::ProcessAcceptance(int offeredPrice) {
     // Generosity ratio toward the merchant (>1 = the player gave the merchant a
     // better-than-market deal). Direction-aware: buying generously = paying more;
@@ -251,7 +343,11 @@ void BarterManager::ProcessAcceptance(int offeredPrice) {
     else                        relGain = RollRelationshipChange(25.0f, 1, "deal in player's favour");
 
     RecordAndClose(offeredPrice, true, false, 0);
-    TransferItemAndGold(offeredPrice);
+    if (isCartMode) {
+        TransferCart(offeredPrice);
+    } else {
+        TransferItemAndGold(offeredPrice);
+    }
 
     // Show brief acceptance confirmation with amount, then auto-close
     UIBridge::GetSingleton()->ShowResult(true, offeredPrice, relGain);
@@ -270,8 +366,7 @@ void BarterManager::ProcessAcceptance(int offeredPrice) {
                     Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
                     currentItem = nullptr;
                     currentItemID = 0;
-                    Hooks::interceptingTransaction = false;
-                    Hooks::lastSelectedItem = nullptr;
+                    Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
                     RefreshBarterMenu(itemID);
                 }
             });
@@ -285,7 +380,8 @@ void BarterManager::ProcessRejection(int offeredPrice) {
         currentEffectivePrice,
         RelationshipManager::GetSingleton()->GetRelationship(currentMerchantID),
         cachedPersonality,
-        patienceRemaining
+        patienceRemaining,
+        currentIsBuying  // net direction for carts: net-sell counters downward
     );
 
     // Greed = how far the offer is in the player's favour vs market (direction-aware):
@@ -333,8 +429,6 @@ void BarterManager::OnCounterResponse(int response) {
             RecordAndClose(0, false, false, currentCounterAmount);
             UIBridge::GetSingleton()->Hide();
             state = BarterState::Idle;
-            Hooks::interceptingTransaction = false;
-            Hooks::lastSelectedItem = nullptr;
             break;
     }
 }
@@ -402,15 +496,17 @@ void BarterManager::OnIntimidateAttempt() {
             : static_cast<int>(currentEffectivePrice * 1.5f);
         RollRelationshipChange(85.0f, -15, "intimidation succeeded");
         RecordAndClose(intimidatedPrice, true, false, 0);
-        TransferItemAndGold(intimidatedPrice);
+        if (isCartMode) {
+            TransferCart(intimidatedPrice);
+        } else {
+            TransferItemAndGold(intimidatedPrice);
+        }
         auto itemID = currentItemID;
         UIBridge::GetSingleton()->Hide();
         state = BarterState::Idle;
         Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
         currentItem = nullptr;
         currentItemID = 0;
-        Hooks::interceptingTransaction = false;
-        Hooks::lastSelectedItem = nullptr;
         RefreshBarterMenu(itemID);
         logger::info("BarterManager: Intimidation succeeded - deal done, window closed");
     } else {
@@ -426,8 +522,6 @@ void BarterManager::OnResultDismissed() {
     Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
     currentItem = nullptr;
     currentItemID = 0;
-    Hooks::interceptingTransaction = false;
-    Hooks::lastSelectedItem = nullptr;
 }
 
 void BarterManager::RetryOffer() {
@@ -442,15 +536,16 @@ void BarterManager::OnCancelled() {
     Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
     currentItem = nullptr;
     currentItemID = 0;
-    Hooks::interceptingTransaction = false;
-    Hooks::lastSelectedItem = nullptr;
 }
 
 void BarterManager::FinalizeDeal(int finalPrice, bool wasCounter) {
-    // Settling on a counter is a completed deal: a modest chance to warm relations.
     int relGain = RollRelationshipChange(50.0f, 1, "counter-offer accepted");
     RecordAndClose(finalPrice, true, wasCounter, wasCounter ? currentCounterAmount : 0);
-    TransferItemAndGold(finalPrice);
+    if (isCartMode) {
+        TransferCart(finalPrice);
+    } else {
+        TransferItemAndGold(finalPrice);
+    }
 
     // Show acceptance result (hides the window), then auto-close
     UIBridge::GetSingleton()->ShowResult(true, finalPrice, relGain);
@@ -469,8 +564,7 @@ void BarterManager::FinalizeDeal(int finalPrice, bool wasCounter) {
                     Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
                     currentItem = nullptr;
                     currentItemID = 0;
-                    Hooks::interceptingTransaction = false;
-                    Hooks::lastSelectedItem = nullptr;
+                    Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
                     RefreshBarterMenu(itemID);
                 }
             });
@@ -520,10 +614,6 @@ void BarterManager::TransferItemAndGold(int finalPrice) {
             return;
         }
 
-        // Allow vanilla processing to proceed
-        Hooks::interceptingTransaction = false;
-        Hooks::lastSelectedItem = nullptr;
-
         // The native ItemSelect handler reads the per-unit price from
         // ItemCard_mc.itemInfo.value (NOT from our callback argument). We must
         // patch the ItemCard's value to our negotiated per-unit price before
@@ -566,6 +656,201 @@ void BarterManager::TransferItemAndGold(int finalPrice) {
         logger::info("TransferItemAndGold: Invoked ItemSelect callback (total={}, x{}, unit={:.2f}, {})",
             finalPrice, amount, unitPrice, isBuying ? "buying" : "selling");
     });
+}
+
+void BarterManager::QuickTransferMarket(RE::FormID formID, int count, bool isBuying, int unitPrice) {
+    const int amount = (count >= 1) ? count : 1;
+    SKSE::GetTaskInterface()->AddUITask([formID, amount, isBuying, unitPrice]() {
+        auto* ui = RE::UI::GetSingleton();
+        auto barterMenu = ui ? ui->GetMenu(RE::BarterMenu::MENU_NAME) : nullptr;
+        if (!barterMenu) { logger::error("QuickTransferMarket: BarterMenu not open"); return; }
+        auto* menu = static_cast<RE::BarterMenu*>(barterMenu.get());
+        auto* movie = barterMenu->uiMovie.get();
+        auto* delegate = barterMenu->fxDelegate.get();
+        if (!movie || !delegate) { logger::error("QuickTransferMarket: movie/delegate null"); return; }
+
+        // Drive the engine's selection to this item so the ItemCard reflects it.
+        Hooks::SelectCartItem(menu, formID, isBuying);
+
+        const double unit = static_cast<double>(unitPrice);
+        for (const char* path : { "_root.Menu_mc.ItemCard_mc.itemInfo", "_root.ItemCard_mc.itemInfo" }) {
+            RE::GFxValue info;
+            if (movie->GetVariable(&info, path) && info.IsObject()) {
+                RE::GFxValue pv; pv.SetNumber(unit);
+                info.SetMember("value", pv);
+            }
+        }
+
+        RE::GFxValue args[4];
+        args[0].SetNumber(0.0);
+        args[1].SetNumber(static_cast<double>(amount));
+        args[2].SetNumber(unit);
+        args[3].SetBoolean(isBuying);
+
+        Hooks::replayingItemSelect = true;
+        delegate->Callback(movie, "ItemSelect", args, 4);
+        Hooks::replayingItemSelect = false;
+        logger::info("QuickTransferMarket: {} x{} @ {} unit ({})",
+            formID, amount, unitPrice, isBuying ? "buy" : "sell");
+    });
+}
+
+namespace {
+    // Direct inventory move for a single cart item + its gold share. Used only as a
+    // fallback when the vanilla ItemSelect selection can't be verified for an item.
+    void DirectTransferEntry(const CartEntry& e, double unitPrice) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return;
+
+        RE::TESObjectREFR* merchantRef = nullptr;
+        auto refHandle = RE::BarterMenu::GetTargetRefHandle();
+        RE::NiPointer<RE::TESObjectREFR> refPtr;
+        if (RE::LookupReferenceByHandle(refHandle, refPtr) && refPtr) merchantRef = refPtr.get();
+        if (!merchantRef) return;
+
+        auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(e.formID);
+        if (!obj) return;
+        auto* gold = RE::TESForm::LookupByID<RE::TESBoundObject>(0x0000000F);
+
+        const int cnt = (e.count >= 1) ? e.count : 1;
+        const int goldAmt = static_cast<int>(unitPrice * cnt + 0.5);
+        using REASON = RE::ITEM_REMOVE_REASON;
+
+        if (e.isBuying) {
+            merchantRef->RemoveItem(obj, cnt, REASON::kStoreInContainer, nullptr, player);
+            if (gold && goldAmt > 0) player->RemoveItem(gold, goldAmt, REASON::kStoreInContainer, nullptr, merchantRef);
+        } else {
+            player->RemoveItem(obj, cnt, REASON::kStoreInContainer, nullptr, merchantRef);
+            if (gold && goldAmt > 0) merchantRef->RemoveItem(gold, goldAmt, REASON::kStoreInContainer, nullptr, player);
+        }
+    }
+
+    // Re-enter the sequential step after a short delay (lets the list rebuild).
+    void ScheduleCartStep(std::shared_ptr<std::function<void(std::size_t, bool)>> step,
+                          std::size_t idx, bool switched, int ms) {
+        std::thread([step, idx, switched, ms]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+            SKSE::GetTaskInterface()->AddTask([step, idx, switched]() {
+                (*step)(idx, switched);
+            });
+        }).detach();
+    }
+}
+
+void BarterManager::TransferCart(int finalPrice) {
+    auto* cart = CartManager::GetSingleton();
+    auto entries = cart->GetEntries();  // copy since we'll clear
+    if (entries.empty()) {
+        logger::warn("TransferCart: cart is empty, nothing to transfer");
+        return;
+    }
+
+    // Distribute the negotiated net across per-item unit prices so the vanilla
+    // transactions (player pays for buys, receives for sells) sum to the deal:
+    //   sum(buy.unit*count) - sum(sell.unit*count) == signedNet
+    // where signedNet is positive when the player pays.
+    const int buySubtotal  = cart->GetBuySubtotal();
+    const int sellSubtotal = cart->GetSellSubtotal();
+    const int signedNet     = currentIsBuying ? finalPrice : -finalPrice;
+
+    double buyFactor = 1.0, sellFactor = 1.0;
+    if (buySubtotal > 0) {
+        buyFactor = static_cast<double>(signedNet + sellSubtotal) / static_cast<double>(buySubtotal);
+        if (buyFactor < 0.0) buyFactor = 0.0;
+    } else if (sellSubtotal > 0) {
+        sellFactor = static_cast<double>(-signedNet) / static_cast<double>(sellSubtotal);
+        if (sellFactor < 0.0) sellFactor = 0.0;
+    }
+
+    std::vector<double> unitPrices;
+    unitPrices.reserve(entries.size());
+    for (const auto& e : entries) {
+        double unit = static_cast<double>(e.marketUnitPrice) * (e.isBuying ? buyFactor : sellFactor);
+        if (unit < 0.0) unit = 0.0;
+        unitPrices.push_back(unit);
+    }
+
+    logger::info("TransferCart: {} items, net={} ({}), buy={}, sell={}",
+        entries.size(), std::abs(signedNet), currentIsBuying ? "player pays" : "player receives",
+        buySubtotal, sellSubtotal);
+
+    auto entriesPtr = std::make_shared<std::vector<CartEntry>>(std::move(entries));
+    auto pricesPtr  = std::make_shared<std::vector<double>>(std::move(unitPrices));
+    auto step       = std::make_shared<std::function<void(std::size_t, bool)>>();
+
+    // Sequential, vanilla-first transfer. For each cart item we make the engine
+    // select that exact row on the correct buy/sell side, then replay the vanilla
+    // "ItemSelect" so the game performs the transaction (ownership, perks, merchant
+    // gold caps, UI updates). If the row can't be verified, we fall back to a direct
+    // move for that one item so the cart always settles correctly.
+    *step = [this, entriesPtr, pricesPtr, step](std::size_t idx, bool switched) {
+        SKSE::GetTaskInterface()->AddUITask([this, idx, switched, entriesPtr, pricesPtr, step]() {
+            if (idx >= entriesPtr->size()) {
+                CartManager::GetSingleton()->Clear();
+                isCartMode = false;
+                Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
+                RefreshBarterMenu(0);
+                logger::info("TransferCart: sequence complete ({} items)", entriesPtr->size());
+                return;
+            }
+
+            auto* ui = RE::UI::GetSingleton();
+            auto menuPtr = ui ? ui->GetMenu<RE::BarterMenu>() : nullptr;
+            auto* menu = menuPtr.get();
+            if (!menu || !menu->uiMovie) {
+                logger::error("TransferCart[{}]: BarterMenu unavailable", idx);
+                return;
+            }
+
+            const auto& entry = (*entriesPtr)[idx];
+            const double unit = (*pricesPtr)[idx];
+
+            // Ensure the correct side is visible; the rebuild is async, so switch
+            // and retry the same item on the next pass.
+            if (Hooks::CurrentSideIsBuying(menu) != entry.isBuying && !switched) {
+                Hooks::SwitchBarterSide(menu, entry.isBuying);
+                ScheduleCartStep(step, idx, true, 140);
+                return;
+            }
+
+            bool usedVanilla = false;
+            if (Hooks::SelectCartItem(menu, entry.formID, entry.isBuying)) {
+                auto* movie = menu->uiMovie.get();
+                auto* delegate = menu->fxDelegate.get();
+                if (movie && delegate) {
+                    // Patch the ItemCard's per-unit value to the negotiated price
+                    // (the native ItemSelect reads the gold amount from here).
+                    RE::GFxValue info;
+                    if (movie->GetVariable(&info, "_root.Menu_mc.ItemCard_mc.itemInfo") && info.IsObject()) {
+                        RE::GFxValue pv; pv.SetNumber(unit);
+                        info.SetMember("value", pv);
+                    }
+                    RE::GFxValue args[4];
+                    args[0].SetNumber(0.0);
+                    args[1].SetNumber(static_cast<double>(entry.count));
+                    args[2].SetNumber(unit);
+                    args[3].SetBoolean(entry.isBuying);
+
+                    Hooks::replayingItemSelect = true;
+                    delegate->Callback(movie, "ItemSelect", args, 4);
+                    Hooks::replayingItemSelect = false;
+                    usedVanilla = true;
+                    logger::info("TransferCart[{}]: ItemSelect {} x{} @ {:.1f} ({})",
+                        idx, entry.name, entry.count, unit, entry.isBuying ? "buy" : "sell");
+                }
+            }
+
+            if (!usedVanilla) {
+                DirectTransferEntry(entry, unit);
+                logger::info("TransferCart[{}]: direct fallback {} x{} @ {:.1f} ({})",
+                    idx, entry.name, entry.count, unit, entry.isBuying ? "buy" : "sell");
+            }
+
+            ScheduleCartStep(step, idx + 1, false, 110);
+        });
+    };
+
+    (*step)(0, false);
 }
 
 void BarterManager::RefreshBarterMenu(RE::FormID itemID) {

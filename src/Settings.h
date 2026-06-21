@@ -23,6 +23,14 @@ public:
     bool skipBelowThreshold = false;
     int valueThreshold = 50;
 
+    // Cart system
+    float cartHoldThreshold = 0.6f;  // seconds to hold Y/B before opening cart negotiation
+    // Cart panel placement (authored BarterMenu stage is ~1280x720). Defaults sit
+    // the panel just left of the merchant, matching the outlined target spot.
+    float cartPanelX = 596.0f;
+    float cartPanelY = 110.0f;
+    float cartPanelScale = 1.0f;  // 0.5..1.5 uniform scale of the cart panel
+
     // Pricing
     float sliderRangeMin = -0.30f;
     float sliderRangeMax = 0.30f;

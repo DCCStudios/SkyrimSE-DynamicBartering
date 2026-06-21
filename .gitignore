@@ -32,3 +32,6 @@ __pycache__/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Decompiled reference SWFs (third-party, analysis only — do not redistribute)
+swf_decomp/

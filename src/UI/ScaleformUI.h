@@ -34,7 +34,7 @@ public:
                     // XInput button masks used as IDCodes:
                     // DPad-Up=0x0001, Down=0x0002, Left=0x0004, Right=0x0008
                     // LB=0x0100, RB=0x0200, A=0x1000, B=0x2000
-                    if (btn->IsPressed()) {
+                    if (btn->IsDown()) {
                         switch (scan) {
                             case 0x0004:  // D-pad Left
                                 gamepadDir = -1;
@@ -57,8 +57,9 @@ public:
                             case 0x4000:  // X button - re-offer
                                 gamepadX = true;
                                 break;
-                            case 0x8000:  // Y button - alternate action
+                            case 0x8000:  // Y button - cart add
                                 gamepadY = true;
+                                logger::info("InputDeviceSink: Y button DOWN detected (scan=0x8000)");
                                 break;
                         }
                     } else if (btn->IsUp()) {
@@ -66,6 +67,10 @@ public:
                         if (scan == 0x0008 && gamepadDir == 1) gamepadDir = 0;
                         if (scan == 0x0100 && gamepadDir == -5) gamepadDir = 0;
                         if (scan == 0x0200 && gamepadDir == 5) gamepadDir = 0;
+                    }
+                    // Track Y button held state for cart hold detection
+                    if (scan == 0x8000) {
+                        gamepadYHeld = btn->IsPressed();
                     }
                 }
                 // Track thumbstick axis for continuous slider movement
@@ -82,11 +87,19 @@ public:
                     usingGamepad = false;
                     changed = true;
                 }
-                // Track keyboard R key for re-offer in counter state
                 if (device == RE::INPUT_DEVICE::kKeyboard) {
                     if (auto* btn = evt->AsButtonEvent()) {
-                        if (btn->IsPressed() && btn->GetIDCode() == 19) {  // Scan code 19 = R
-                            keyboardR = true;
+                        auto scan = btn->GetIDCode();
+                        if (btn->IsDown()) {
+                            if (scan == 19) keyboardR = true;   // Scan code 19 = R
+                            if (scan == 48) {
+                                keyboardB = true;   // Scan code 48 = B (cart add)
+                                logger::info("InputDeviceSink: B key DOWN detected (scan=48)");
+                            }
+                        }
+                        // Track held state for B key (cart hold detection)
+                        if (scan == 48) {
+                            keyboardBHeld = btn->IsPressed();
                         }
                     }
                 }
@@ -106,6 +119,11 @@ public:
     bool ConsumeX() { return gamepadX.exchange(false); }
     bool ConsumeY() { return gamepadY.exchange(false); }
     bool ConsumeR() { return keyboardR.exchange(false); }
+    bool ConsumeB() { return keyboardB.exchange(false); }
+
+    // Hold state queries (non-consuming; polled each frame for hold detection)
+    bool IsYHeld() const { return gamepadYHeld; }
+    bool IsBHeld() const { return keyboardBHeld; }
 
 private:
     InputDeviceSink() = default;
@@ -117,7 +135,10 @@ private:
     std::atomic<bool> gamepadCancel{ false };
     std::atomic<bool> gamepadX{ false };
     std::atomic<bool> gamepadY{ false };
+    std::atomic<bool> gamepadYHeld{ false };
     std::atomic<bool> keyboardR{ false };
+    std::atomic<bool> keyboardB{ false };
+    std::atomic<bool> keyboardBHeld{ false };
 };
 
 class BarterOfferMenu : public RE::IMenu {

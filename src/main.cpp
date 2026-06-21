@@ -5,6 +5,7 @@
 #include "RelationshipManager.h"
 #include "UI/UIBridge.h"
 #include "UI/ScaleformUI.h"
+#include "UI/BarterCartMenu.h"
 #include "Menu/ConfigMenu.h"
 
 namespace {
