@@ -68,6 +68,10 @@ void UIBridge::ShowResult(bool accepted, int goldAmount, int relDelta) {
     if (activeUI) activeUI->ShowResult(accepted, goldAmount, relDelta);
 }
 
+void UIBridge::UpdateRelationship(int effectiveRelationship) {
+    if (activeUI) activeUI->UpdateRelationship(effectiveRelationship);
+}
+
 void UIBridge::Hide() {
     if (activeUI) activeUI->Hide();
 }

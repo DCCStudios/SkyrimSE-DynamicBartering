@@ -1,6 +1,8 @@
 #pragma once
 #include "DealMemory.h"
 #include "MerchantPersonality.h"
+#include "MerchantCategory.h"
+#include <unordered_set>
 
 class RelationshipManager {
 public:
@@ -28,12 +30,27 @@ public:
     MerchantPersonality GetPersonality(RE::Actor* merchant);
     void SetPersonalityOverride(RE::FormID merchantRefID, MerchantPersonality::Trait trait);
 
+    // --- Category-wide reputation (milestone bonuses) ---------------------------
+    // A standing offset applied to EVERY merchant of a category, so milestones like
+    // becoming Archmage lift all magic traders at once. Effective relationship for a
+    // merchant = their per-merchant standing + their category offset (clamped).
+    int GetCategoryReputation(MerchantCategory cat) const;
+    void AddCategoryReputation(MerchantCategory cat, int delta);
+    int GetEffectiveRelationship(RE::FormID merchantRefID, MerchantCategory cat) const;
+
+    // One-shot milestone bookkeeping so each milestone applies its bonus only once.
+    bool HasMilestone(std::uint32_t id) const;
+    void MarkMilestone(std::uint32_t id);
+
     const std::unordered_map<RE::FormID, MerchantMemory>& GetAllData() const { return merchantData; }
+    std::unordered_map<int, int> GetCategoryReputationSnapshot() const;
 
 private:
     RelationshipManager() = default;
     std::unordered_map<RE::FormID, MerchantMemory> merchantData;
     std::unordered_map<RE::FormID, MerchantPersonality::Trait> personalityOverrides;
+    std::unordered_map<int, int> categoryReputation;       // key = int(MerchantCategory)
+    std::unordered_set<std::uint32_t> appliedMilestones;   // milestone ids already granted
     mutable std::mutex dataMutex;
 
     std::string GetSavePath() const;

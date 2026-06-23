@@ -5,17 +5,8 @@
 #include "Settings.h"
 #include "UI/ScaleformUI.h"
 #include "UI/BarterCartMenu.h"
-
-// Lightweight debug log gated behind Settings::debugLogging so per-frame polling of
-// the highlighted item doesn't spam the log. Implemented as a macro because the SKSE
-// logger captures std::source_location via deduction guides and cannot be forwarded
-// through a wrapper template.
-#define DbgLog(...)                                            \
-    do {                                                       \
-        if (Settings::GetSingleton()->debugLogging) {          \
-            logger::info(__VA_ARGS__);                         \
-        }                                                      \
-    } while (0)
+#include "Integration/ChimBridge.h"
+#include "DebugLog.h"
 
 namespace {
     class ItemSelectProxy : public RE::FxDelegateHandler::CallbackProcessor {
@@ -26,7 +17,7 @@ namespace {
             if (a_methodName == "ItemSelect") {
                 Hooks::originalItemSelect = a_method;
                 real->Process(a_methodName, &Hooks::ItemSelectInterceptor);
-                logger::info("Captured vanilla ItemSelect callback; installed interceptor");
+                DbgLog("Captured vanilla ItemSelect callback; installed interceptor");
             } else {
                 real->Process(a_methodName, a_method);
             }
@@ -44,7 +35,41 @@ namespace {
         bool stolen = false;
     };
 
+    // A cart add/remove that the vanilla item-select kicked off but that we haven't
+    // committed yet. Only a TAP of activate/accept commits it; holding activate/mouse
+    // past the tap window discards it (so a hold never adds/removes). Driven per-frame
+    // from AdvanceMovieBart.
+    struct PendingCartAdd {
+        bool       active = false;
+        float      elapsed = 0.0f;
+        RE::FormID formID = 0;
+        int        amount = 1;
+        int        availCount = 1;  // how many are available in the source stack
+        bool       isBuying = true;
+        int        unitPrice = 0;
+        std::string name;
+        bool       stolen = false;
+    };
+    PendingCartAdd g_pendingAdd;
+
     bool DetermineIsBuying(RE::BarterMenu* menu);  // defined below
+
+    // Force the vanilla stackable quantity slider for the highlighted item, bypassing
+    // SkyUI's quantityMenu.minCount threshold. On confirm the itemCard dispatches
+    // "quantitySelect" -> BarterMenu.onQuantityMenuSelect -> doTransaction -> ItemSelect,
+    // which ItemSelectInterceptor reroutes into the cart. Returns false if the menu
+    // couldn't be driven (caller should fall back to a direct full-stack add).
+    bool TriggerCartQuantityMenu(RE::BarterMenu* menu, int count) {
+        if (!menu || !menu->uiMovie || count < 2) { return false; }
+        auto* movie = menu->uiMovie.get();
+        RE::GFxValue itemCard;
+        if (!movie->GetVariable(&itemCard, "_root.Menu_mc.ItemCard_mc") || !itemCard.IsObject()) {
+            return false;
+        }
+        RE::GFxValue arg; arg.SetNumber(static_cast<double>(count));
+        RE::GFxValue res;
+        return itemCard.Invoke("ShowQuantityMenu", &res, &arg, 1);
+    }
 
     bool ReadHighlightedItem(RE::BarterMenu* menu, HighlightedItemInfo& out) {
         if (!menu) { return false; }
@@ -417,6 +442,50 @@ namespace {
         mbox->QueueMessage();
         DbgLog("Cart guard: popup for '{}' (in cart)", info.name);
     }
+
+    // Pure-DLL wrapper around the BarterMenu's Scaleform "UpdateItemCardInfo" function.
+    // It multiplies the item card's displayed `value` by the merchant's current
+    // relationship/personality price multiplier (buy vs sell), then chains to the
+    // original function - so the vanilla price number reflects standing and still
+    // composes with other price mods (DPF / DynamicPrices) that wrap the same call.
+    // Display-only: the mod's own negotiation reads the raw list-row value and applies
+    // the multiplier itself, so prices are never double-counted.
+    class PriceCardWrapper : public RE::GFxFunctionHandler {
+    public:
+        explicit PriceCardWrapper(RE::GFxValue&& a_old) : oldFunc(std::move(a_old)) {}
+
+        void Call(Params& a_params) override {
+            auto* settings = Settings::GetSingleton();
+            auto* mgr = BarterManager::GetSingleton();
+            if (a_params.argCount >= 1 && settings->modEnabled &&
+                settings->showRelationshipInVanillaPrices && mgr->GetCurrentMerchant()) {
+                bool isBuying = true;
+                if (a_params.thisPtr) {
+                    RE::GFxValue res;
+                    if (a_params.thisPtr->Invoke("isViewingVendorItems", &res)) {
+                        if (res.IsBool()) isBuying = res.GetBool();
+                        else if (res.IsNumber()) isBuying = res.GetNumber() != 0.0;
+                    }
+                }
+                float mult = mgr->GetCurrentPriceMult(isBuying);
+                if (mult != 1.0f) {
+                    RE::GFxValue& updateObj = a_params.args[0];
+                    if (updateObj.IsObject()) {
+                        RE::GFxValue value;
+                        if (updateObj.GetMember("value", &value) && value.IsNumber()) {
+                            value.SetNumber(value.GetNumber() * static_cast<double>(mult));
+                            updateObj.SetMember("value", value);
+                        }
+                    }
+                }
+            }
+            // Chain to the original (or the next mod's wrapper) so other price mods keep working.
+            oldFunc.Invoke("call", a_params.retVal, a_params.argsWithThisRef, a_params.argCount + 1);
+        }
+
+    private:
+        RE::GFxValue oldFunc;
+    };
 }
 
 void Hooks::Install() {
@@ -453,6 +522,42 @@ void Hooks::ItemSelectInterceptor(const RE::FxDelegateArgs& a_params) {
     auto* mgr = BarterManager::GetSingleton();
     auto* cart = CartManager::GetSingleton();
 
+    // Block Quick Buy: the vanilla item-select flow is allowed to run (so the
+    // stackable quantity menu can appear), but instead of transacting we reroute it
+    // into the cart using the amount the player chose (args = [amount, value, isVendor]).
+    if (settings->modEnabled && settings->blockQuickBuy && mgr->GetState() == BarterState::Idle) {
+        int amount = 1;
+        if (a_params.GetArgCount() >= 1 && a_params[0].IsNumber()) {
+            amount = static_cast<int>(a_params[0].GetNumber());
+            if (amount < 1) amount = 1;
+        }
+        auto* ui = RE::UI::GetSingleton();
+        auto bm = ui ? ui->GetMenu(RE::BarterMenu::MENU_NAME) : nullptr;
+        if (bm) {
+            auto* bMenu = static_cast<RE::BarterMenu*>(bm.get());
+            HighlightedItemInfo info;
+            if (ReadHighlightedItem(bMenu, info)) {
+                // Defer the toggle: a quick tap commits it, a hold discards it (handled
+                // per-frame in AdvanceMovieBart), so holding activate/mouse never
+                // adds/removes from the cart.
+                g_pendingAdd.active    = true;
+                g_pendingAdd.elapsed   = 0.0f;
+                g_pendingAdd.formID    = info.formID;
+                g_pendingAdd.amount    = amount;
+                g_pendingAdd.availCount = info.count;
+                g_pendingAdd.isBuying  = info.isBuying;
+                g_pendingAdd.unitPrice = info.marketUnitPrice;
+                g_pendingAdd.name      = info.name;
+                g_pendingAdd.stolen    = info.stolen;
+                DbgLog("ItemSelectInterceptor: pending cart toggle '{}' x{} ({})",
+                       info.name, amount, info.isBuying ? "buy" : "sell");
+            } else {
+                DbgLog("ItemSelectInterceptor: blockQuickBuy add failed (no highlight)");
+            }
+        }
+        return;  // never transact while blocking quick buy
+    }
+
     // Cart guard: activating (insta buy/sell) an item that's already in the cart is
     // ambiguous, so intercept and ask the player what they meant: open the cart
     // offer, quick buy/sell just this item (removing it from the cart), or cancel.
@@ -481,6 +586,23 @@ void Hooks::ItemSelectInterceptor(const RE::FxDelegateArgs& a_params) {
 void Hooks::PostCreateBart(RE::BarterMenu* menu) {
     _PostCreateBart(menu);
     BarterManager::GetSingleton()->OnBarterMenuCreated(menu);
+
+    // Install the relationship-aware item-card price wrapper (display only; chains with
+    // any other price mod that wraps UpdateItemCardInfo). The Call() body no-ops unless
+    // the feature is enabled, so it's always safe to leave installed.
+    if (menu && menu->uiMovie) {
+        auto& root = menu->GetRuntimeData().root;
+        if (root.IsObject()) {
+            RE::GFxValue oldFunc;
+            if (root.GetMember("UpdateItemCardInfo", &oldFunc) && oldFunc.IsObject()) {
+                auto impl = RE::make_gptr<PriceCardWrapper>(std::move(oldFunc));
+                RE::GFxValue newFunc;
+                menu->uiMovie->CreateFunction(&newFunc, impl.get());
+                root.SetMember("UpdateItemCardInfo", newFunc);
+                DbgLog("Installed UpdateItemCardInfo price wrapper");
+            }
+        }
+    }
 }
 
 RE::UI_MESSAGE_RESULTS Hooks::ProcessMessageBart(RE::BarterMenu* menu, RE::UIMessage& a_message) {
@@ -504,7 +626,7 @@ RE::UI_MESSAGE_RESULTS Hooks::ProcessMessageBart(RE::BarterMenu* menu, RE::UIMes
             msgType == RE::UI_MESSAGE_TYPE::kForceHide ||
             msgType == RE::UI_MESSAGE_TYPE::kInventoryUpdate) {
             if (msgType == RE::UI_MESSAGE_TYPE::kInventoryUpdate && settings->debugLogging) {
-                logger::info("ProcessMessageBart: passing kInventoryUpdate through (state={})",
+                DbgLog("ProcessMessageBart: passing kInventoryUpdate through (state={})",
                     static_cast<int>(state));
             }
             return _ProcessMessageBart(menu, a_message);
@@ -525,6 +647,10 @@ RE::UI_MESSAGE_RESULTS Hooks::ProcessMessageBart(RE::BarterMenu* menu, RE::UIMes
             if (eventStr == "YButton") {
                 return RE::UI_MESSAGE_RESULTS::kHandled;
             }
+            // NB: under blockQuickBuy we deliberately let Accept/Activate flow to
+            // vanilla so SkyUI's item-press (and the stackable quantity slider) runs
+            // normally; the resulting ItemSelect is rerouted into the cart by
+            // ItemSelectInterceptor instead of transacting.
         }
     }
 
@@ -544,12 +670,18 @@ void Hooks::AdvanceMovieBart(RE::BarterMenu* menu, float a_interval, std::uint32
 
     if (!idle) {
         // Negotiating: hide the prompt (offer menu is on top), keep the cart panel
-        // synced. No cart input while negotiating.
+        // synced. No cart input while negotiating. Drain any latched presses so they
+        // can't fire a stray cart action the moment we return to Idle.
         Hooks::itemHighlighted = false;
         Hooks::promptShow = false;
         Hooks::cartHoldActive = false;
         Hooks::cartHoldTimer = 0.0f;
         Hooks::cartPendingTap = false;
+        g_pendingAdd.active = false;  // drop any uncommitted add when leaving Idle
+        auto* sink = InputDeviceSink::GetSingleton();
+        sink->ConsumeY();
+        sink->ConsumeB();
+        sink->ConsumeActivatePress();
         BarterCartMenu::Update(menu->uiMovie.get());
         _AdvanceMovieBart(menu, a_interval, a_currentTime);
         return;
@@ -569,30 +701,83 @@ void Hooks::AdvanceMovieBart(RE::BarterMenu* menu, float a_interval, std::uint32
     // cart offer WITHOUT toggling, so holding-to-open never accidentally adds the
     // currently-highlighted item.
     auto* inputSink = InputDeviceSink::GetSingleton();
-    const bool yPressed = inputSink->ConsumeY();
-    const bool bPressed = inputSink->ConsumeB();
+    const bool gamepad = inputSink->IsUsingGamepad();
+    // Barter key (Y on gamepad, B on keyboard) always drives the cart.
+    bool triggerPressed = gamepad ? inputSink->ConsumeY() : inputSink->ConsumeB();
+    bool triggerHeld    = gamepad ? inputSink->IsYHeld() : inputSink->IsBHeld();
 
-    if ((yPressed || bPressed) && !cartHoldActive) {
-        DbgLog("Cart input press: Y={} B={}", yPressed, bPressed);
+    // Under blockQuickBuy the Activate input (A / E / left-mouse) is left to the
+    // vanilla item-select path so the stackable quantity slider can appear; the
+    // resulting ItemSelect is rerouted into the cart by ItemSelectInterceptor. Drain
+    // our latched copy so it can't double as a barter-key cart trigger.
+    inputSink->ConsumeActivatePress();
+
+    // Commit-or-discard a deferred cart add (queued by ItemSelectInterceptor). A quick
+    // tap of activate/accept commits the toggle; holding activate/mouse past the tap
+    // window discards it, so a HOLD never adds/removes from the cart.
+    if (g_pendingAdd.active) {
+        const float dt = (a_interval > 0.0f && a_interval < 1.0f) ? a_interval : (1.0f / 60.0f);
+        g_pendingAdd.elapsed += dt;
+        if (!inputSink->IsActivateHeld()) {
+            auto* c = CartManager::GetSingleton();
+            if (g_pendingAdd.availCount >= 2 && g_pendingAdd.availCount <= 5) {
+                // SkyUI only opens the quantity slider for stacks larger than 5, so a
+                // stack of 2-5 always commits amount=1 per tap. Build it one unit at a
+                // time instead of letting ApplyQuantity subtract on the next tap
+                // (0 -> 1 -> ... -> max -> 0).
+                c->AddUnit(g_pendingAdd.formID, g_pendingAdd.isBuying, g_pendingAdd.unitPrice,
+                    g_pendingAdd.name, g_pendingAdd.stolen, g_pendingAdd.availCount);
+                DbgLog("Pending cart commit (tap, incremental): '{}'", g_pendingAdd.name);
+            } else {
+                // Quantity-aware commit: a fresh item is added with the chosen amount; an
+                // item already in the cart has the chosen amount subtracted (selecting >=
+                // what's in the cart removes it entirely).
+                c->ApplyQuantity(g_pendingAdd.formID, g_pendingAdd.amount,
+                    g_pendingAdd.isBuying, g_pendingAdd.unitPrice, g_pendingAdd.name, g_pendingAdd.stolen);
+                DbgLog("Pending cart commit (tap): '{}' x{}", g_pendingAdd.name, g_pendingAdd.amount);
+            }
+            g_pendingAdd.active = false;
+        } else if (g_pendingAdd.elapsed > settings->cartHoldThreshold) {
+            DbgLog("Pending cart toggle discarded (hold): '{}'", g_pendingAdd.name);
+            g_pendingAdd.active = false;
+        }
+    }
+
+    // When "Block quick buy/sell" is on, the barter key is HOLD-ONLY: it never taps to
+    // add/remove (the activate key owns that), and the hold meter fills immediately with
+    // no tap-window delay. When the option is off, the barter key keeps its tap-to-toggle
+    // behavior and the meter only starts after the tap window.
+    const bool  barterAdds = !settings->blockQuickBuy;
+    const float tapWindow  = barterAdds ? settings->cartHoldThreshold : 0.0f;
+
+    if (triggerPressed && !cartHoldActive) {
+        DbgLog("Cart input press (gamepad={}, barterAdds={})", gamepad, barterAdds);
         cartHoldActive = true;
         cartHoldTimer = 0.0f;
-        Hooks::cartPendingTap = true;  // becomes a tap if released before threshold
+        Hooks::cartPendingTap = barterAdds;  // only a tap candidate when allowed to add
     }
 
     if (cartHoldActive) {
-        const bool stillHeld = inputSink->IsUsingGamepad() ? inputSink->IsYHeld() : inputSink->IsBHeld();
+        const bool stillHeld = triggerHeld;
         if (stillHeld) {
             cartHoldTimer += (a_interval > 0.0f && a_interval < 1.0f) ? a_interval : (1.0f / 60.0f);
-            if (cartHoldTimer >= settings->cartHoldThreshold && Hooks::cartPendingTap) {
-                // HOLD recognised -> open the cart offer (do NOT toggle on hold).
+            const float fillTime  = settings->cartHoldFillTime;
+            // Once we hold past the tap window, this is no longer a tap; the fill meter
+            // (drawn from cartHoldTimer - tapWindow) now starts climbing. Releasing during
+            // the fill phase simply cancels (no tap, no open).
+            if (Hooks::cartPendingTap && cartHoldTimer >= tapWindow) {
                 Hooks::cartPendingTap = false;
+            }
+            if (!Hooks::cartPendingTap && cartHoldTimer >= tapWindow + fillTime) {
+                // HOLD complete -> open the cart offer (do NOT toggle on hold).
                 cartHoldActive = false;
                 cartHoldTimer = 0.0f;
                 auto* cart = CartManager::GetSingleton();
                 // Convenience: holding directly on an item with an empty cart barters
                 // just that item. With items already in the cart, hold opens the cart
-                // without adding the highlighted item.
-                if (cart->IsEmpty()) {
+                // without adding the highlighted item. Skipped under Block quick buy/sell
+                // since the barter key must not add anything there.
+                if (barterAdds && cart->IsEmpty()) {
                     HighlightedItemInfo info;
                     if (ReadHighlightedItem(menu, info)) {
                         cart->Toggle(info.formID, info.count, info.isBuying,
@@ -600,7 +785,7 @@ void Hooks::AdvanceMovieBart(RE::BarterMenu* menu, float a_interval, std::uint32
                     }
                 }
                 if (!cart->IsEmpty()) {
-                    logger::info("Cart hold complete: starting cart offer ({} items)", cart->Count());
+                    DbgLog("Cart hold complete: starting cart offer ({} items)", cart->Count());
                     mgr->StartCartOffer();
                 }
             }
@@ -609,10 +794,30 @@ void Hooks::AdvanceMovieBart(RE::BarterMenu* menu, float a_interval, std::uint32
             if (Hooks::cartPendingTap) {
                 HighlightedItemInfo info;
                 if (ReadHighlightedItem(menu, info)) {
-                    DbgLog("Cart tap: toggling '{}' ({})", info.name, info.isBuying ? "buy" : "sell");
-                    CartManager::GetSingleton()->Toggle(
-                        info.formID, info.count, info.isBuying,
-                        info.marketUnitPrice, info.name, info.stolen);
+                    auto* c = CartManager::GetSingleton();
+                    // For a stackable item that isn't in the cart yet, force the vanilla
+                    // quantity slider so the player can pick how many to add (the
+                    // confirmed amount is rerouted into the cart by ItemSelectInterceptor).
+                    // Already-in-cart taps just toggle it back off (no pointless slider).
+                    // Skip the slider when the cart is full so Toggle below shows the
+                    // "cart is full" prompt instead of opening a slider we'd then refuse.
+                    if (settings->blockQuickBuy && info.count > 5 && !c->Contains(info.formID) &&
+                        c->CanAccept(info.formID, info.isBuying) &&
+                        TriggerCartQuantityMenu(menu, info.count)) {
+                        DbgLog("Cart tap: opened quantity slider for '{}' (x{} avail)",
+                               info.name, info.count);
+                    } else if (info.count >= 2 && info.count <= 5 && c->CanAccept(info.formID, info.isBuying)) {
+                        // SkyUI only opens the quantity slider for stacks larger than 5, so a
+                        // stack of 2-5 builds one unit per tap instead of toggling the whole
+                        // stack (0 -> 1 -> ... -> max -> 0).
+                        DbgLog("Cart tap: incremental add for '{}' (stack of {})", info.name, info.count);
+                        c->AddUnit(info.formID, info.isBuying, info.marketUnitPrice,
+                                   info.name, info.stolen, info.count);
+                    } else {
+                        DbgLog("Cart tap: toggling '{}' ({})", info.name, info.isBuying ? "buy" : "sell");
+                        c->Toggle(info.formID, info.count, info.isBuying,
+                                  info.marketUnitPrice, info.name, info.stolen);
+                    }
                 } else {
                     DbgLog("Cart tap: ReadHighlightedItem failed (no item highlighted?)");
                 }
@@ -743,6 +948,10 @@ RE::BSEventNotifyControl BarterMenuEventSink::ProcessEvent(
             BarterCartMenu::OnBarterClose();
             BarterManager::GetSingleton()->OnBarterClose();
         }
+    } else if (a_event->menuName == RE::DialogueMenu::MENU_NAME && !a_event->opening) {
+        // Leaving the conversation: now the world is fully back, so release any barter
+        // summary that was held back while the dialogue menu was still open.
+        ChimBridge::OnDialogueClosed();
     }
 
     return RE::BSEventNotifyControl::kContinue;

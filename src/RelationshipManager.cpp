@@ -19,12 +19,24 @@ nlohmann::json RelationshipManager::BuildJsonRootLocked() const {
         snprintf(hexStr, sizeof(hexStr), "%08X", id);
         root["personalityOverrides"][hexStr] = MerchantPersonality::TraitToString(trait);
     }
+
+    root["categoryReputation"] = nlohmann::json::object();
+    for (const auto& [cat, value] : categoryReputation) {
+        root["categoryReputation"][std::to_string(cat)] = value;
+    }
+
+    root["appliedMilestones"] = nlohmann::json::array();
+    for (auto id : appliedMilestones) {
+        root["appliedMilestones"].push_back(id);
+    }
     return root;
 }
 
 void RelationshipManager::ApplyJsonRootLocked(const nlohmann::json& root) {
     merchantData.clear();
     personalityOverrides.clear();
+    categoryReputation.clear();
+    appliedMilestones.clear();
 
     if (root.contains("merchants")) {
         for (const auto& m : root["merchants"]) {
@@ -37,6 +49,22 @@ void RelationshipManager::ApplyJsonRootLocked(const nlohmann::json& root) {
         for (auto& [key, val] : root["personalityOverrides"].items()) {
             RE::FormID id = std::stoul(key, nullptr, 16);
             personalityOverrides[id] = MerchantPersonality::StringToTrait(val.get<std::string>());
+        }
+    }
+
+    // New keys read with defaults so older saves load cleanly (no co-save bump).
+    if (root.contains("categoryReputation") && root["categoryReputation"].is_object()) {
+        for (auto& [key, val] : root["categoryReputation"].items()) {
+            try {
+                categoryReputation[std::stoi(key)] = val.get<int>();
+            } catch (...) {}
+        }
+    }
+    if (root.contains("appliedMilestones") && root["appliedMilestones"].is_array()) {
+        for (auto& v : root["appliedMilestones"]) {
+            if (v.is_number_unsigned() || v.is_number_integer()) {
+                appliedMilestones.insert(v.get<std::uint32_t>());
+            }
         }
     }
 }
@@ -227,4 +255,47 @@ MerchantPersonality RelationshipManager::GetPersonality(RE::Actor* merchant) {
 void RelationshipManager::SetPersonalityOverride(RE::FormID merchantRefID, MerchantPersonality::Trait trait) {
     std::lock_guard lock(dataMutex);
     personalityOverrides[merchantRefID] = trait;
+}
+
+int RelationshipManager::GetCategoryReputation(MerchantCategory cat) const {
+    std::lock_guard lock(dataMutex);
+    auto it = categoryReputation.find(static_cast<int>(cat));
+    return (it != categoryReputation.end()) ? it->second : 0;
+}
+
+void RelationshipManager::AddCategoryReputation(MerchantCategory cat, int delta) {
+    if (delta == 0) return;
+    std::lock_guard lock(dataMutex);
+    auto* settings = Settings::GetSingleton();
+    int& v = categoryReputation[static_cast<int>(cat)];
+    v = std::clamp(v + delta, settings->relMin, settings->relMax);
+}
+
+int RelationshipManager::GetEffectiveRelationship(RE::FormID merchantRefID, MerchantCategory cat) const {
+    std::lock_guard lock(dataMutex);
+    int base = 0;
+    auto it = merchantData.find(merchantRefID);
+    if (it != merchantData.end()) base = it->second.relationship;
+
+    int catOffset = 0;
+    auto cit = categoryReputation.find(static_cast<int>(cat));
+    if (cit != categoryReputation.end()) catOffset = cit->second;
+
+    auto* settings = Settings::GetSingleton();
+    return std::clamp(base + catOffset, settings->relMin, settings->relMax);
+}
+
+bool RelationshipManager::HasMilestone(std::uint32_t id) const {
+    std::lock_guard lock(dataMutex);
+    return appliedMilestones.find(id) != appliedMilestones.end();
+}
+
+void RelationshipManager::MarkMilestone(std::uint32_t id) {
+    std::lock_guard lock(dataMutex);
+    appliedMilestones.insert(id);
+}
+
+std::unordered_map<int, int> RelationshipManager::GetCategoryReputationSnapshot() const {
+    std::lock_guard lock(dataMutex);
+    return categoryReputation;
 }

@@ -2,8 +2,10 @@
 #include "UI/BarterCartMenu.h"
 #include "UI/ScaleformUI.h"
 #include "CartManager.h"
+#include "BarterManager.h"
 #include "Hooks.h"
 #include "Settings.h"
+#include "DebugLog.h"
 
 #include <cmath>
 
@@ -85,6 +87,7 @@ namespace {
     }
 
     constexpr std::int32_t kPanelBg     = 0x0B0906;  // very dark warm (matches offer window)
+    constexpr std::int32_t kCartBg      = 0x161616;  // dark grey (cart window fill)
     constexpr std::int32_t kTrim        = 0xC8B43C;  // gold trim
     constexpr std::int32_t kTrimDim     = 0x6B5E2A;  // dim gold (separators)
     constexpr std::int32_t kMeterFill   = 0xE0C864;  // bright gold
@@ -104,9 +107,10 @@ namespace {
     constexpr double kHeaderY   = 10.0;
     constexpr double kSep1Y     = 38.0;
     constexpr double kTotalsY   = 44.0;
-    constexpr double kHintY     = 72.0;
-    constexpr double kSep2Y     = 96.0;
-    constexpr double kItemsY    = 102.0;
+    constexpr double kRelInfoY  = 70.0;   // relationship discount/markup line
+    constexpr double kHintY     = 94.0;
+    constexpr double kSep2Y     = 118.0;
+    constexpr double kItemsY    = 124.0;
 
     // Gamepad fallback anchor (used only if the selected row can't be resolved).
     constexpr double kPromptKeyW = 22.0;
@@ -148,24 +152,76 @@ namespace {
         }
     }
 
+    // DirectInput keyboard scan code -> short display label. Covers the keys a
+    // user is realistically likely to bind "Activate" to; nullptr if unknown.
+    const char* ScanCodeToLabel(std::uint32_t sc) {
+        switch (sc) {
+            case 0x02: return "1"; case 0x03: return "2"; case 0x04: return "3";
+            case 0x05: return "4"; case 0x06: return "5"; case 0x07: return "6";
+            case 0x08: return "7"; case 0x09: return "8"; case 0x0A: return "9";
+            case 0x0B: return "0";
+            case 0x10: return "Q"; case 0x11: return "W"; case 0x12: return "E";
+            case 0x13: return "R"; case 0x14: return "T"; case 0x15: return "Y";
+            case 0x16: return "U"; case 0x17: return "I"; case 0x18: return "O";
+            case 0x19: return "P";
+            case 0x1E: return "A"; case 0x1F: return "S"; case 0x20: return "D";
+            case 0x21: return "F"; case 0x22: return "G"; case 0x23: return "H";
+            case 0x24: return "J"; case 0x25: return "K"; case 0x26: return "L";
+            case 0x2C: return "Z"; case 0x2D: return "X"; case 0x2E: return "C";
+            case 0x2F: return "V"; case 0x30: return "B"; case 0x31: return "N";
+            case 0x32: return "M";
+            case 0x1C: return "Ent";   // Enter
+            case 0x39: return "Spc";   // Space
+            case 0x0F: return "Tab";
+            default:   return nullptr;
+        }
+    }
+
+    // Resolve the keyboard key currently bound to the menu "Activate" event,
+    // returning a short label. Falls back to "E" (the vanilla menu default).
+    std::string GetActivateKeyLabel() {
+        auto* controlMap = RE::ControlMap::GetSingleton();
+        auto* userEvents = RE::UserEvents::GetSingleton();
+        if (controlMap && userEvents) {
+            const std::uint32_t key = controlMap->GetMappedKey(
+                userEvents->activate, RE::INPUT_DEVICE::kKeyboard,
+                RE::UserEvents::INPUT_CONTEXT_ID::kItemMenu);
+            if (const char* label = ScanCodeToLabel(key)) {
+                return label;
+            }
+        }
+        return "E";
+    }
+
     // Draw the keybind prompt glyph. Keyboard => rounded gold key-cap with the
     // letter; gamepad => a filled controller face button with the correctly
     // coloured PlayStation/Xbox symbol, so it reads as a real pad button rather
     // than a plain square text box.
-    void DrawPromptGlyph(RE::GFxMovieView* m, int glyph) {
-        // glyph: 0 = Xbox Y, 1 = PlayStation (triangle), 2 = keyboard B
-        const bool gamepad = (glyph != 2);
+    //
+    // glyph codes:
+    //   0 = Xbox Y, 1 = PlayStation triangle, 2 = keyboard "B"  (barter key)
+    //   3 = Xbox A, 4 = PlayStation cross,    5 = keyboard Activate key
+    // Codes 3-5 are used when "Block Quick Buy" repurposes Activate as the
+    // add-to-cart action.
+    // Draws into <base>.glyphArt, using a sibling <base>.keyField text field for
+    // lettered buttons. `base` is e.g. "_root.DBPrompt" or "_root.DBCart.hintGlyph".
+    void DrawPromptGlyph(RE::GFxMovieView* m, int glyph, const char* base) {
+        const bool gamepad = (glyph != 2 && glyph != 5);
+        const std::string artPath = std::string(base) + ".glyphArt";
+        const std::string keyField = std::string(base) + ".keyField";
+        const char* art = artPath.c_str();
 
         // (Re)create the art clip so repeated calls don't stack drawings.
-        m->Invoke("_root.DBPrompt.glyphArt.removeMovieClip", nullptr, nullptr, 0);
-        CreateClip(m, "_root.DBPrompt", "glyphArt", 0.0);
-        const char* art = "_root.DBPrompt.glyphArt";
+        m->Invoke((artPath + ".removeMovieClip").c_str(), nullptr, nullptr, 0);
+        CreateClip(m, base, "glyphArt", 0.0);
 
         const double S = 20.0;        // button footprint
         const double cx = S * 0.5, cy = S * 0.5;
 
         if (!gamepad) {
-            // Keyboard key-cap: dark rounded square with gold trim + "B".
+            // Keyboard key-cap: dark rounded square with gold trim + the letter.
+            // Barter key (2) shows "B"; Activate key (5) shows the bound key.
+            const std::string label = (glyph == 5) ? GetActivateKeyLabel() : std::string("B");
             LineStyle(m, art, 1.5, kTrim, 100.0);
             BeginFill(m, art, kPanelBg, 95.0);
             // simple square cap (rounded look comes from the small size)
@@ -175,8 +231,8 @@ namespace {
             LineTo(m, art, 1.0, S - 1.0);
             LineTo(m, art, 1.0, 1.0);
             EndFill(m, art);
-            SetStr(m, "_root.DBPrompt.keyField.htmlText", MakeHtml("B", 13, "#F0DCA0", "center"));
-            SetBool(m, "_root.DBPrompt.keyField._visible", true);
+            SetStr(m, (keyField + ".htmlText").c_str(), MakeHtml(EscapeHtml(label), 13, "#F0DCA0", "center"));
+            SetBool(m, (keyField + "._visible").c_str(), true);
             return;
         }
 
@@ -188,35 +244,44 @@ namespace {
         EndFill(m, art);
 
         if (glyph == 1) {
-            // PlayStation triangle (green), drawn as a filled symbol.
+            // PlayStation triangle (green) - barter key.
             LineStyle(m, art, 1.4, 0x59D17A, 100.0);
             const double r = 5.6;
             MoveTo(m, art, cx, cy - r);
             LineTo(m, art, cx + r * 0.866, cy + r * 0.5);
             LineTo(m, art, cx - r * 0.866, cy + r * 0.5);
             LineTo(m, art, cx, cy - r);
-            SetBool(m, "_root.DBPrompt.keyField._visible", false);
+            SetBool(m, (keyField + "._visible").c_str(), false);
+        } else if (glyph == 4) {
+            // PlayStation cross "X" (light blue) - Activate key.
+            LineStyle(m, art, 1.8, 0x6FA8FF, 100.0);
+            const double r = 4.8;
+            MoveTo(m, art, cx - r, cy - r); LineTo(m, art, cx + r, cy + r);
+            MoveTo(m, art, cx + r, cy - r); LineTo(m, art, cx - r, cy + r);
+            SetBool(m, (keyField + "._visible").c_str(), false);
+        } else if (glyph == 3) {
+            // Xbox "A" (green) - Activate key.
+            SetStr(m, (keyField + ".htmlText").c_str(), MakeHtml("A", 13, "#6FBF4F", "center"));
+            SetBool(m, (keyField + "._visible").c_str(), true);
         } else {
-            // Xbox "Y" (amber) rendered as a coloured letter on the housing.
-            SetStr(m, "_root.DBPrompt.keyField.htmlText", MakeHtml("Y", 13, "#E6C24A", "center"));
-            SetBool(m, "_root.DBPrompt.keyField._visible", true);
+            // Xbox "Y" (amber) - barter key.
+            SetStr(m, (keyField + ".htmlText").c_str(), MakeHtml("Y", 13, "#E6C24A", "center"));
+            SetBool(m, (keyField + "._visible").c_str(), true);
         }
     }
 
-    // Gold corner brackets + dim section separators, drawn into _root.DBCart.frame.
+    // Thin gold outline + dim section separators, drawn into _root.DBCart.frame.
     void DrawCartFrame(RE::GFxMovieView* m) {
         const char* f = "_root.DBCart.frame";
-        const double W = kPanelW, H = kPanelH, L = 16.0;
+        const double W = kPanelW, H = kPanelH;
 
-        LineStyle(m, f, 2.0, kTrim, 100.0);
-        // Top-left
-        MoveTo(m, f, 0.0, L);   LineTo(m, f, 0.0, 0.0); LineTo(m, f, L, 0.0);
-        // Top-right
-        MoveTo(m, f, W - L, 0.0); LineTo(m, f, W, 0.0); LineTo(m, f, W, L);
-        // Bottom-left
-        MoveTo(m, f, 0.0, H - L); LineTo(m, f, 0.0, H); LineTo(m, f, L, H);
-        // Bottom-right
-        MoveTo(m, f, W - L, H); LineTo(m, f, W, H); LineTo(m, f, W, H - L);
+        // Thin continuous gold border around the whole panel.
+        LineStyle(m, f, 1.25, kTrim, 100.0);
+        MoveTo(m, f, 0.0, 0.0);
+        LineTo(m, f, W, 0.0);
+        LineTo(m, f, W, H);
+        LineTo(m, f, 0.0, H);
+        LineTo(m, f, 0.0, 0.0);
 
         // Section separators
         LineStyle(m, f, 1.0, kTrimDim, 90.0);
@@ -229,9 +294,15 @@ void BarterCartMenu::OnBarterOpen() {
     built = false;
     lastPromptVisible = true;
     lastGlyph = -1;
-    lastPanelVisible = true;
+    // Build() injects the cart clip with _visible = false, so seed the cached
+    // visibility to false too. Otherwise, when "cart visible by default" is on,
+    // panelVisible (true) already equals the cached value and the show-it SetBool
+    // never fires - leaving the panel stuck hidden the entire session.
+    lastHintGlyph = -2;
+    lastPanelVisible = false;
     lastCartCount = -1;
     lastNet = -2147483647;
+    lastRelMilli = -2147483647;
     lastMeterVisible = true;
     lastMeterFrac = -1.0f;
     lastPanelX = -1.0e9f;
@@ -288,9 +359,10 @@ void BarterCartMenu::Build(RE::GFxMovieView* m) {
     }
 
     // Background fill (depth 1) + drawn gold frame/ornaments (depth 2).
+    // Dark grey, semi-transparent (reads as "semi-transparent black").
     CreateText(m, "_root.DBCart", "bg", 1.0, 0.0, 0.0, kPanelW, kPanelH);
-    StyleText(m, "_root.DBCart.bg", false, true, kPanelBg, false, 0);
-    SetNum(m, "_root.DBCart.bg._alpha", 92.0);
+    StyleText(m, "_root.DBCart.bg", false, true, kCartBg, false, 0);
+    SetNum(m, "_root.DBCart.bg._alpha", 80.0);
 
     CreateClip(m, "_root.DBCart", "frame", 2.0);
     DrawCartFrame(m);
@@ -303,19 +375,34 @@ void BarterCartMenu::Build(RE::GFxMovieView* m) {
     CreateText(m, "_root.DBCart", "totals", 4.0, kPad, kTotalsY, kPanelW - kPad * 2.0, 26.0);
     StyleText(m, "_root.DBCart.totals", false, false, 0, false, 0);
 
-    CreateText(m, "_root.DBCart", "hint", 5.0, kPad, kHintY, kPanelW - kPad * 2.0, 22.0);
+    // Relationship standing -> price effect (green discount / red markup).
+    CreateText(m, "_root.DBCart", "relInfo", 8.0, kPad, kRelInfoY, kPanelW - kPad * 2.0, 22.0);
+    StyleText(m, "_root.DBCart.relInfo", true, false, 0, false, 0);
+
+    // Hint = [barter-key glyph] + "Hold to open the offer." The glyph sits to the
+    // LEFT of the text and is (re)drawn each frame in UpdateCartPanel (the input
+    // device / icon style can change at runtime).
+    const double kHintGlyphW = 22.0;
+    CreateClip(m, "_root.DBCart", "hintGlyph", 5.0);
+    SetNum(m, "_root.DBCart.hintGlyph._x", kPad);
+    SetNum(m, "_root.DBCart.hintGlyph._y", kHintY - 2.0);
+    CreateText(m, "_root.DBCart.hintGlyph", "keyField", 1.0, 0.0, 0.0, 20.0, 20.0);
+    StyleText(m, "_root.DBCart.hintGlyph.keyField", false, false, 0, false, 0);
+
+    CreateText(m, "_root.DBCart", "hint", 6.0, kPad + kHintGlyphW + 4.0, kHintY,
+               kPanelW - kPad * 2.0 - kHintGlyphW - 4.0, 22.0);
     StyleText(m, "_root.DBCart.hint", true, false, 0, false, 0);
     SetStr(m, "_root.DBCart.hint.htmlText",
-        MakeHtml("Hold the Barter button to open the offer.", 11, "#8C7B3C", "left"));
+        MakeHtml("Hold to open the offer.", 11, "#8C7B3C", "left"));
 
-    CreateText(m, "_root.DBCart", "items", 6.0, kPad, kItemsY,
+    CreateText(m, "_root.DBCart", "items", 7.0, kPad, kItemsY,
                kPanelW - kPad * 2.0, kPanelH - kItemsY - kPad);
     StyleText(m, "_root.DBCart.items", true, false, 0, false, 0);
 
     SetBool(m, "_root.DBCart._visible", false);
 
     built = true;
-    logger::info("CartOverlay: injected DBPrompt + DBCart into BarterMenu movie");
+    DbgLog("CartOverlay: injected DBPrompt + DBCart into BarterMenu movie");
 }
 
 void BarterCartMenu::Update(RE::GFxMovieView* m) {
@@ -362,21 +449,39 @@ void BarterCartMenu::UpdatePromptAndMeter(RE::GFxMovieView* m) {
     if (show) {
         const bool gamepad = Hooks::promptGamepad;
         const bool ps = Settings::GetSingleton()->gamepadIconStyle == GamepadIconStyle::PlayStation;
-        const int glyph = !gamepad ? 2 : (ps ? 1 : 0);
+        // When Block Quick Buy is on, Activate is the add-to-cart button, so the
+        // prompt shows the Activate glyph (Xbox A / PS cross / bound keyboard key)
+        // instead of the barter-key glyph (Xbox Y / PS triangle / "B").
+        const bool block = Settings::GetSingleton()->blockQuickBuy;
+        int glyph;
+        if (!gamepad) {
+            glyph = block ? 5 : 2;
+        } else if (block) {
+            glyph = ps ? 4 : 3;
+        } else {
+            glyph = ps ? 1 : 0;
+        }
         if (glyph != lastGlyph) {
             lastGlyph = glyph;
-            DrawPromptGlyph(m, glyph);
+            DrawPromptGlyph(m, glyph, "_root.DBPrompt");
         }
         SetNum(m, "_root.DBPrompt._x", static_cast<double>(Hooks::promptX));
         SetNum(m, "_root.DBPrompt._y", static_cast<double>(Hooks::promptY));
     }
 
-    // Hold meter (fills while the cart button is held).
+    // Hold meter: stays empty during the tap window, then fills over the fill time
+    // (so a quick tap never flashes the bar - it only climbs once the hold engages).
     float frac = 0.0f;
     if (Hooks::cartHoldActive && show) {
-        float thr = Settings::GetSingleton()->cartHoldThreshold;
-        if (thr > 0.0f) frac = Hooks::cartHoldTimer / thr;
-        if (frac > 1.0f) frac = 1.0f;
+        auto* s = Settings::GetSingleton();
+        // Block quick buy/sell removes the tap-window delay for the barter key, so the
+        // meter starts filling immediately on press (matches Hooks::AdvanceMovieBart).
+        const float tapWindow = s->blockQuickBuy ? 0.0f : s->cartHoldThreshold;
+        const float fillTime  = s->cartHoldFillTime;
+        if (fillTime > 0.0f && Hooks::cartHoldTimer > tapWindow) {
+            frac = (Hooks::cartHoldTimer - tapWindow) / fillTime;
+            if (frac > 1.0f) frac = 1.0f;
+        }
     }
     const bool meterVisible = show && frac > 0.0f;
     if (meterVisible != lastMeterVisible) {
@@ -392,9 +497,12 @@ void BarterCartMenu::UpdatePromptAndMeter(RE::GFxMovieView* m) {
 
 void BarterCartMenu::UpdateCartPanel(RE::GFxMovieView* m) {
     auto* cart = CartManager::GetSingleton();
+    auto* settings = Settings::GetSingleton();
     const int cartCount = static_cast<int>(cart->Count());
 
-    const bool panelVisible = cartCount > 0;
+    // Visible by default the moment the menu opens (with an empty-state hint), not
+    // just after the first add. Falls back to count-gated when the option is off.
+    const bool panelVisible = settings->cartVisibleByDefault || cartCount > 0;
     if (panelVisible != lastPanelVisible) {
         lastPanelVisible = panelVisible;
         SetBool(m, "_root.DBCart._visible", panelVisible);
@@ -404,10 +512,30 @@ void BarterCartMenu::UpdateCartPanel(RE::GFxMovieView* m) {
         return;
     }
 
+    // Cart hint glyph = the BARTER key/button to HOLD (always the barter variant,
+    // never the activate glyph). Redraw only when the input device/style changes.
+    {
+        const bool gamepad = Hooks::promptGamepad;
+        const bool ps = Settings::GetSingleton()->gamepadIconStyle == GamepadIconStyle::PlayStation;
+        const int hg = !gamepad ? 2 : (ps ? 1 : 0);
+        if (hg != lastHintGlyph) {
+            lastHintGlyph = hg;
+            DrawPromptGlyph(m, hg, "_root.DBCart.hintGlyph");
+        }
+    }
+
     const int net = cart->GetNetAmount();
-    if (cartCount == lastCartCount && net == lastNet) return;
+
+    // Relationship standing -> base-price effect (shown as a buy discount/markup %).
+    auto* mgr = BarterManager::GetSingleton();
+    const bool hasMerchant = mgr->GetCurrentMerchant() != nullptr;
+    const float buyMult = mgr->GetCurrentPriceMult(true);
+    const int relMilli = static_cast<int>(std::lround((buyMult - 1.0f) * 1000.0f));
+
+    if (cartCount == lastCartCount && net == lastNet && relMilli == lastRelMilli) return;
     lastCartCount = cartCount;
     lastNet = net;
+    lastRelMilli = relMilli;
 
     // Header: title + item count.
     std::string header =
@@ -419,14 +547,59 @@ void BarterCartMenu::UpdateCartPanel(RE::GFxMovieView* m) {
     // player receives gold (net sell). Sell items contribute +gold to the player.
     std::string netLabel;
     const char* netCol;
-    if (net > 0)      { netLabel = "You Pay: " + std::to_string(net); netCol = "#E0B070"; }
-    else if (net < 0) { netLabel = "You Receive: " + std::to_string(-net); netCol = "#9ACD6A"; }
-    else              { netLabel = "Even Trade"; netCol = "#C8B464"; }
+    if (cartCount == 0) { netLabel = "Cart is empty"; netCol = "#8C8060"; }
+    else if (net > 0)   { netLabel = "You Pay: " + std::to_string(net) + " Gold"; netCol = "#E0B070"; }
+    else if (net < 0)   { netLabel = "You Receive: " + std::to_string(-net) + " Gold"; netCol = "#9ACD6A"; }
+    else                { netLabel = "Even Trade"; netCol = "#C8B464"; }
     SetStr(m, "_root.DBCart.totals.htmlText",
         MakeHtml("<b>" + netLabel + "</b>", 14, netCol, "left"));
 
+    // Relationship discount / markup line (green = favorable, red = unfavorable).
+    {
+        const int discPct = static_cast<int>(std::lround((1.0f - buyMult) * 100.0f));
+        std::string relText;
+        const char* relCol;
+        if (!hasMerchant || !settings->relationshipPricing || discPct == 0) {
+            relText = "Standing: market prices";
+            relCol = "#A0987C";
+        } else if (discPct > 0) {
+            relText = "Standing: " + std::to_string(discPct) + "% buy discount";
+            relCol = "#9ACD6A";
+        } else {
+            relText = "Standing: +" + std::to_string(-discPct) + "% buy markup";
+            relCol = "#D98A6A";
+        }
+        SetStr(m, "_root.DBCart.relInfo.htmlText", MakeHtml(relText, 11, relCol, "left"));
+    }
+
+    // Hint adapts to whether anything is staged yet.
+    SetStr(m, "_root.DBCart.hint.htmlText",
+        MakeHtml(cartCount == 0 ? "Add items, then hold to open." : "Hold to open the offer.",
+                 11, "#8C7B3C", "left"));
+
     // Items: one per line. Buying = gold leaving the player (shown -), selling =
     // gold coming to the player (shown +). A bullet + a faint separator per row.
+    //
+    // Dynamic fit: the items field has a fixed height, so as more rows are added we
+    // shrink the row text to keep everything visible, down to a minimum readable size.
+    // Each row costs roughly (font + spacer)*~1.3px of leading; solve for the largest
+    // font in [kMinItemFont, kBaseItemFont] that keeps all rows inside the field.
+    constexpr int    kBaseItemFont = 12;
+    constexpr int    kMinItemFont  = 9;
+    constexpr double kItemsH       = kPanelH - kItemsY - kPad;  // available list height
+    const int n = cartCount > 0 ? cartCount : 1;
+    int itemFont = kMinItemFont;  // floor if nothing larger fits
+    for (int f = kBaseItemFont; f >= kMinItemFont; --f) {
+        const int spacer = (f - 6) > 3 ? (f - 6) : 3;        // matches spacer row below
+        const double rowH = (static_cast<double>(f) + spacer) * 1.32 + 1.0;
+        if (n * rowH <= kItemsH) { itemFont = f; break; }    // largest size that fits
+    }
+    const int spacerFont = (itemFont - 6) > 3 ? (itemFont - 6) : 3;
+    const int bulletFont = itemFont > 1 ? itemFont - 1 : itemFont;
+    const std::string fs = std::to_string(itemFont);
+    const std::string bs = std::to_string(bulletFont);
+    const std::string ss = std::to_string(spacerFont);
+
     std::string inner;
     for (const auto& e : cart->GetEntries()) {
         const int line = e.count * e.marketUnitPrice;
@@ -435,12 +608,12 @@ void BarterCartMenu::UpdateCartPanel(RE::GFxMovieView* m) {
         const char* col = e.isBuying ? "#E0B070" : "#9ACD6A";
         const char* sign = e.isBuying ? "-" : "+";
         inner +=
-            "<font color=\"#C8B464\" size=\"11\">\xE2\x80\xA2 </font>"          // bullet
-            "<font color=\"#DCDCDC\" size=\"12\">" + name + "</font>"
-            "  <font color=\"" + std::string(col) + "\" size=\"12\"><b>" + sign +
+            "<font color=\"#C8B464\" size=\"" + bs + "\">\xE2\x80\xA2 </font>"  // bullet
+            "<font color=\"#DCDCDC\" size=\"" + fs + "\">" + name + "</font>"
+            "  <font color=\"" + std::string(col) + "\" size=\"" + fs + "\"><b>" + sign +
             std::to_string(line) + "</b></font>"
-            "<br/><font color=\"#3A3526\" size=\"6\"> </font><br/>";            // thin spacer row
+            "<br/><font color=\"#3A3526\" size=\"" + ss + "\"> </font><br/>";   // thin spacer row
     }
 
-    SetStr(m, "_root.DBCart.items.htmlText", MakeHtml(inner, 12, "#DCDCDC", "left"));
+    SetStr(m, "_root.DBCart.items.htmlText", MakeHtml(inner, itemFont, "#DCDCDC", "left"));
 }

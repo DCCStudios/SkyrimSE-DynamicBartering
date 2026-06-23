@@ -1,6 +1,8 @@
 #pragma once
 #include "PriceCalculator.h"
 #include "CounterOffer.h"
+#include "MerchantCategory.h"
+#include "Integration/ChimBridge.h"
 
 struct OfferData {
     std::string itemName;
@@ -46,6 +48,12 @@ public:
     void StartOffer(RE::TESBoundObject* item, int baseValue, bool isBuying, bool isStolen, int amount = 1);
     void StartCartOffer();  // Cart-wide negotiation over CartManager's net
 
+    // Recompute and re-push the currently-open offer window (prices, slider range,
+    // acceptance, relationship meter) from live data. No-op unless an offer window is
+    // open and awaiting the player. Used after a relationship change made outside the
+    // negotiation (e.g. the SKSE-menu debug slider) so it applies immediately.
+    void RefreshActiveOffer();
+
     // Immediately buy/sell a single item at its market price (no negotiation), by
     // selecting its row and replaying the vanilla ItemSelect. Used by the cart
     // "quick buy/sell" popup when the player activates an item already in the cart.
@@ -73,6 +81,15 @@ public:
     RE::Actor* GetCurrentMerchant() const { return currentMerchant; }
     bool IsBarterActive() const { return barterActive; }
 
+    // The merchant's detected specialty for the current session (Generalist when no
+    // merchant). Used by the cart UI / config menu price-effect readout.
+    MerchantCategory GetCurrentCategory() const { return cachedCategory; }
+
+    // Buy/sell base-price multiplier the relationship + personality currently impose
+    // on this merchant (1.0 = neutral; <1 buy discount / >1 buy markup). Used by the
+    // cart discount text and the vanilla item-card price wrapper.
+    float GetCurrentPriceMult(bool buying) const;
+
     // Authoritative acceptance chance for the current item at a hypothetical price.
     // Used by the UI so the displayed verdict matches the real decision exactly.
     float PreviewAcceptanceChance(int offeredPrice);
@@ -84,6 +101,11 @@ public:
 private:
     BarterManager() = default;
 
+    // Build the OfferData from current session/cached state and show (or, when
+    // refresh=true, live-update) the offer window. Shared by Start*Offer + RefreshActiveOffer.
+    void ShowSingleOffer(bool refresh);
+    void ShowCartOffer(bool refresh);
+
     AcceptanceContext BuildAcceptanceContext(int offeredPrice);
     void ProcessAcceptance(int offeredPrice);
     void ProcessRejection(int offeredPrice);
@@ -94,6 +116,9 @@ private:
     // Probabilistic relationship change: applies `delta` with `chancePercent` odds.
     // Returns the delta actually applied (0 if the roll missed).
     int RollRelationshipChange(float chancePercent, int delta, const char* reason);
+
+    // Push a barter outcome to CHIM (no-op unless enabled + reachable).
+    void EmitChimEvent(ChimBridge::Action action, int offeredPrice, bool bigMoment, int counterPrice = 0);
 
     void TransferItemAndGold(int finalPrice);
     void TransferCart(int finalNetPrice);  // Multi-item transfer loop
@@ -110,6 +135,7 @@ private:
     RE::FormID currentItemID = 0;
     int currentBasePrice = 0;
     int currentEffectivePrice = 0;
+    int currentRawBaseValue = 0;       // raw vanilla market value passed to StartOffer (for live refresh)
     bool currentIsBuying = false;
     bool currentIsStolen = false;
     int currentAmount = 1;            // quantity being transacted (stacks)
@@ -125,4 +151,8 @@ private:
     PerkBonuses cachedPerks;
     MerchantPersonality cachedPersonality;
     float cachedSpeech = 15.0f;
+    MerchantCategory cachedCategory = MerchantCategory::Generalist;
+    // Specialty match for the current offer (single item or value-weighted cart),
+    // computed once per offer and read by BuildAcceptanceContext.
+    float cachedSpecialtyFactor = 0.0f;
 };

@@ -10,6 +10,10 @@ public:
     virtual void ShowOffer(const OfferData& data) = 0;
     virtual void ShowCounterOffer(int counterAmount, int patience) = 0;
     virtual void ShowResult(bool accepted, int goldAmount, int relDelta) = 0;
+    // Live-update the relationship meter while an offer window is open (e.g. after a
+    // failed intimidation or an SKSE-menu debug change). Default no-op for backends
+    // that don't render a meter.
+    virtual void UpdateRelationship(int effectiveRelationship) {}
     virtual void Hide() = 0;
     virtual bool IsAvailable() const = 0;
 };
@@ -26,6 +30,7 @@ public:
     void ShowOffer(const OfferData& data);
     void ShowCounterOffer(int counterAmount, int patience);
     void ShowResult(bool accepted, int goldAmount, int relDelta);
+    void UpdateRelationship(int effectiveRelationship);
     void Hide();
 
     IBarterUI* GetActiveUI() const { return activeUI; }

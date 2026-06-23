@@ -1,0 +1,7 @@
+{
+    "name": "CHIM-DynamicBartering",
+    "description": "Lets AI NPCs detect and react to haggling, intimidation, counter-offers and deals from the 'Silver Tongue - Dynamic Bartering' SKSE mod. Barter outcomes are recorded to the merchant's memory and big moments can trigger an immediate spoken reaction.",
+    "version": "1.0.0",
+    "schema_version": 2,
+    "git_repo": ""
+}

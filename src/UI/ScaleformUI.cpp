@@ -3,11 +3,17 @@
 #include "BarterManager.h"
 #include "Hooks.h"
 #include "Settings.h"
+#include "BarterSounds.h"
+#include "Integration/ChimBridge.h"
+#include "DebugLog.h"
+#include <limits>
 
 namespace {
-    // How far above market the slider lets the player go (paying more when buying,
-    // asking more when selling). 3.0 = up to +200% over market.
-    constexpr double kOverMarketCapMult = 3.0;
+    // Set whenever a "by 5" step (bumpers/shoulder/PgUp-PgDn) adjusts the slider, so the
+    // shared slider-movement feedback in AdvanceMovie can play the distinct big-step cue
+    // instead of the single-step click. Cleared once that feedback frame consumes it.
+    // UI input + Advance run on the main thread, so a plain bool is sufficient.
+    bool g_step5Pending = false;
 
     // Build an inline keybind glyph: <img> referencing an exported SWF sprite
     // (linkage name set via ExportAssets in generate_swf.py).
@@ -105,7 +111,7 @@ namespace {
 }
 
 BarterOfferMenu::BarterOfferMenu() {
-    logger::info("BarterOfferMenu: Constructing menu, loading SWF from '{}'", MENU_PATH);
+    DbgLog("BarterOfferMenu: Constructing menu, loading SWF from '{}'", MENU_PATH);
 
     // FxDelegate must be set up BEFORE LoadMovieEx so BSScaleformManager can connect it
     fxDelegate.reset(new RE::FxDelegate());
@@ -134,7 +140,7 @@ BarterOfferMenu::BarterOfferMenu() {
         highQuality.SetNumber(2.0);  // HIGH quality
         view->SetVariable("_quality", highQuality);
 
-        logger::info("BarterOfferMenu: SWF loaded successfully (movie=0x{:X}), FxDelegate registered",
+        DbgLog("BarterOfferMenu: SWF loaded successfully (movie=0x{:X}), FxDelegate registered",
             reinterpret_cast<uintptr_t>(view.get()));
     } else {
         logger::error("BarterOfferMenu: Failed to load SWF from '{}' - uiMovie is null", MENU_PATH);
@@ -146,14 +152,27 @@ BarterOfferMenu::BarterOfferMenu() {
     menuFlags.set(RE::UI_MENU_FLAGS::kUsesCursor);
     depthPriority = 10;
     inputContext = Context::kNone;
-    logger::info("BarterOfferMenu: Menu flags set (Modal|RequiresUpdate|RendersOffscreen|UsesCursor), depth={}", depthPriority);
+    DbgLog("BarterOfferMenu: Menu flags set (Modal|RequiresUpdate|RendersOffscreen|UsesCursor), depth={}", depthPriority);
+
+    // With SkyrimSouls - Unpaused Game Menus the barter menu keeps the world running so
+    // CHIM NPCs can react live while haggling. Make sure this offer window never re-adds
+    // a pause/freeze on top of that, and tag it with SkyrimSouls' own "unpaused" flag bit
+    // (1<<28) so its combat-pause bookkeeping leaves us alone too.
+    if (ChimBridge::SkyrimSoulsActive() && Settings::GetSingleton()->chimUnpauseOfferWindow) {
+        constexpr auto kSoulsUnpaused = static_cast<RE::UI_MENU_FLAGS>(1u << 28);
+        menuFlags.reset(RE::UI_MENU_FLAGS::kPausesGame);
+        menuFlags.reset(RE::UI_MENU_FLAGS::kFreezeFrameBackground);
+        menuFlags.set(RE::UI_MENU_FLAGS::kRequiresUpdate);
+        menuFlags.set(kSoulsUnpaused);
+        DbgLog("BarterOfferMenu: SkyrimSouls detected - offer window marked unpaused");
+    }
 }
 
 void BarterOfferMenu::Register() {
     auto* ui = RE::UI::GetSingleton();
     if (ui) {
         ui->Register(MENU_NAME, Creator);
-        logger::info("BarterOfferMenu registered");
+        DbgLog("BarterOfferMenu registered");
     }
 }
 
@@ -162,7 +181,7 @@ RE::IMenu* BarterOfferMenu::Creator() {
 }
 
 void BarterOfferMenu::Show() {
-    logger::info("BarterOfferMenu::Show() - Requesting menu open");
+    DbgLog("BarterOfferMenu::Show() - Requesting menu open");
     auto* msgQ = RE::UIMessageQueue::GetSingleton();
     if (msgQ) {
         msgQ->AddMessage(MENU_NAME, RE::UI_MESSAGE_TYPE::kShow, nullptr);
@@ -172,7 +191,7 @@ void BarterOfferMenu::Show() {
 }
 
 void BarterOfferMenu::Hide() {
-    logger::info("BarterOfferMenu::Hide() - Requesting menu close");
+    DbgLog("BarterOfferMenu::Hide() - Requesting menu close");
     auto* msgQ = RE::UIMessageQueue::GetSingleton();
     if (msgQ) {
         msgQ->AddMessage(MENU_NAME, RE::UI_MESSAGE_TYPE::kHide, nullptr);
@@ -213,6 +232,7 @@ void BarterOfferMenu::ApplyHintCells(int state) {
         "hg_tab", "hg_b", "hg_ci",
         "hg_r",
         "hg_ar", "hg_pad",
+        "hg_lb", "hg_rb", "hg_l1", "hg_r1",
         "hg_tab2", "hg_b2", "hg_ci2",
     };
     for (auto* name : allGlyphNames) {
@@ -227,6 +247,7 @@ void BarterOfferMenu::ApplyHintCells(int state) {
     setVis("_root.HintLbl2._visible", false);
     setVis("_root.HintLbl3._visible", false);
     setVis("_root.HintLbl4._visible", false);
+    setVis("_root.HintLbl5._visible", false);  // bumper "by 5" cue (gamepad offer only)
 
     if (state < 0) return;  // hide-all (e.g. accepted result screen)
 
@@ -262,6 +283,31 @@ void BarterOfferMenu::ApplyHintCells(int state) {
         setLbl("_root.HintLbl3.htmlText", "Cancel");
         setLbl("_root.HintLbl4.htmlText", "Adjust");
         setVis("_root.HintLbl4._visible", true);
+        // Slot 3b (right of Adjust): shoulder bumpers move the slider by 5. Gamepad
+        // only -> show the LB/RB (or L1/R1) pair + "by 5"; hidden entirely on keyboard.
+        // The pair is nudged left and scaled down a touch vs. the other (full-size)
+        // glyphs so it reads as a secondary cue next to "Adjust".
+        if (gamepad) {
+            const char* g1 = ps ? "hg_l1" : "hg_lb";
+            const char* g2 = ps ? "hg_r1" : "hg_rb";
+            auto placeBumper = [this](const char* name, double x, double y, double scale) {
+                std::string base = std::string("_root.") + name;
+                RE::GFxValue v;
+                v.SetNumber(x);     uiMovie->SetVariable((base + "._x").c_str(), v);
+                v.SetNumber(y);     uiMovie->SetVariable((base + "._y").c_str(), v);
+                v.SetNumber(scale); uiMovie->SetVariable((base + "._xscale").c_str(), v);
+                v.SetNumber(scale); uiMovie->SetVariable((base + "._yscale").c_str(), v);
+            };
+            constexpr double kBumpY = 320.0, kBumpScale = 78.0, kBumpX0 = 686.0, kBumpStep = 22.0;
+            showGlyph(g1);
+            showGlyph(g2);
+            placeBumper(g1, kBumpX0, kBumpY, kBumpScale);
+            placeBumper(g2, kBumpX0 + kBumpStep, kBumpY, kBumpScale);
+            setLbl("_root.HintLbl5.htmlText", "by 5");
+            RE::GFxValue lx; lx.SetNumber(kBumpX0 + kBumpStep + 34.0);
+            uiMovie->SetVariable("_root.HintLbl5._x", lx);
+            setVis("_root.HintLbl5._visible", true);
+        }
     }
     setVis("_root.HintLbl1._visible", true);
     setVis("_root.HintLbl2._visible", true);
@@ -282,20 +328,45 @@ void BarterOfferMenu::PositionCoin() {
 }
 
 void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime) {
+    // Tracks the slider value between frames to detect movement (any input method) and
+    // play a feedback click. NaN = uninitialised / freshly opened (skip first compare).
+    static double s_lastSliderValue = std::numeric_limits<double>::quiet_NaN();
+
     if (pendingOfferData.has_value() && uiMovie) {
-        logger::info("BarterOfferMenu::AdvanceMovie - Applying pending offer data");
+        DbgLog("BarterOfferMenu::AdvanceMovie - Applying pending offer data");
         SetOfferData(pendingOfferData.value());
         pendingOfferData.reset();
+        s_lastSliderValue = std::numeric_limits<double>::quiet_NaN();
     }
 
     // Tick down input cooldown (prevents activation key from auto-submitting)
     if (inputCooldown > 0.0f) {
         inputCooldown -= a_interval;
-        // Drain any queued accept inputs during cooldown
+        // Drain any queued inputs during cooldown. Cancel is included so a latched
+        // cancel/back press from the BarterMenu (e.g. the key that opened this window)
+        // can't instantly close the freshly-opened offer window on its first frame.
         if (auto* sink = InputDeviceSink::GetSingleton()) {
             sink->ConsumeAccept();
             sink->ConsumeX();
             sink->ConsumeR();
+            sink->ConsumeCancel();
+        }
+    }
+
+    // Slider movement feedback: play a click whenever the value changes in the offer
+    // state (covers mouse drag, D-pad/stick steps, and the LB/RB "by 5" bumpers).
+    if (uiMovie && !showingCounter && !showingResult) {
+        RE::GFxValue sv;
+        if (uiMovie->GetVariable(&sv, "_root.sliderValue") && sv.IsNumber()) {
+            const double cur = sv.GetNumber();
+            if (!std::isnan(s_lastSliderValue) && cur != s_lastSliderValue) {
+                BarterSounds::Play(g_step5Pending ? BarterSounds::Event::SliderStep5
+                                                  : BarterSounds::Event::MoveSlider);
+            }
+            s_lastSliderValue = cur;
+            // Consume the by-5 marker each feedback frame (whether or not the value moved,
+            // so a clamped/no-op big step can't mislabel a later single step).
+            g_step5Pending = false;
         }
     }
 
@@ -416,7 +487,7 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
         // Handle click on mouse-down within a button (don't require drag release)
         if (mouseJustPressed && hoveredButton >= 0) {
             const char* btnName = buttons[hoveredButton].name;
-            logger::info("BarterOfferMenu: Button clicked: {}", btnName);
+            DbgLog("BarterOfferMenu: Button clicked: {}", btnName);
             if (std::string_view(btnName) == "btn_submit") {
                 RE::GFxValue sliderVal;
                 uiMovie->GetVariable(&sliderVal, "_root.sliderValue");
@@ -515,7 +586,9 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
             }
         }
         if (inputSink->ConsumeCancel()) {
-            if (showingResult) {
+            if (inputCooldown > 0.0f) {
+                // Ignore - cooldown active (swallows the press that opened this window)
+            } else if (showingResult) {
                 showingResult = false;
                 RestoreOfferUI();
             } else if (showingCounter) {
@@ -562,14 +635,17 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
         // Consume Y to prevent accidental input passthrough
         inputSink->ConsumeY();
 
-        // Handle D-pad/bumper directional input for slider (only in offer state)
-        int rawDir = inputSink->ConsumeGamepadDir();
+        // Handle D-pad/bumper directional input for slider (only in offer state). Read
+        // (don't consume) the held direction so a sustained press keeps feeding the
+        // hold-to-repeat block below instead of clearing itself after one frame.
+        int rawDir = inputSink->GetGamepadDir();
         if (!showingCounter && !showingResult && rawDir != 0 && uiMovie) {
             // D-pad press: if it's a NEW direction, move exactly 1 and start grace timer
             if (rawDir != gamepadHoldDir) {
                 // New direction or first press: exactly 1 step
                 RE::GFxValue arg;
                 int step = (rawDir == -5 || rawDir == 5) ? rawDir : (rawDir > 0 ? 1 : -1);
+                if (step == 5 || step == -5) g_step5Pending = true;
                 arg.SetNumber(static_cast<double>(step));
                 uiMovie->Invoke("_root.adjustSlider", nullptr, &arg, 1);
                 gamepadHoldDir = (rawDir > 0) ? 1 : -1;  // Normalize direction
@@ -630,6 +706,7 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
                     RE::GFxValue arg;
                     int step = (std::abs(gamepadHoldDir) == 5) ? gamepadHoldDir : 
                                ((gamepadHoldDir > 0 ? 1 : -1) * static_cast<int>(speed));
+                    if (step == 5 || step == -5) g_step5Pending = true;
                     arg.SetNumber(static_cast<double>(step));
                     uiMovie->Invoke("_root.adjustSlider", nullptr, &arg, 1);
                 }
@@ -740,14 +817,14 @@ RE::UI_MESSAGE_RESULTS BarterOfferMenu::ProcessMessage(RE::UIMessage& a_message)
                 auto* userEvents = RE::UserEvents::GetSingleton();
                 auto eventStr = strData->fixedStr;
 
-                logger::trace("BarterOfferMenu event: {}", eventStr.c_str());
+                DbgLog("BarterOfferMenu event: {}", eventStr.c_str());
 
                 if (eventStr == userEvents->cancel || eventStr == userEvents->back) {
                     // Ignore during input cooldown (prevents stale events after state transitions)
                     if (inputCooldown > 0.0f) {
                         return RE::UI_MESSAGE_RESULTS::kHandled;
                     }
-                    logger::info("BarterOfferMenu: Cancel/Back pressed");
+                    DbgLog("BarterOfferMenu: Cancel/Back pressed");
                     gamepadHoldDir = 0;
                     if (showingResult) {
                         showingResult = false;
@@ -782,7 +859,7 @@ RE::UI_MESSAGE_RESULTS BarterOfferMenu::ProcessMessage(RE::UIMessage& a_message)
                         return RE::UI_MESSAGE_RESULTS::kHandled;
                     }
                     if (showingResult) {
-                        logger::info("BarterOfferMenu: Accept pressed in result state - returning to offer");
+                        DbgLog("BarterOfferMenu: Accept pressed in result state - returning to offer");
                         showingResult = false;
                         inputCooldown = 0.3f;
                         if (lastResultAccepted) {
@@ -796,14 +873,14 @@ RE::UI_MESSAGE_RESULTS BarterOfferMenu::ProcessMessage(RE::UIMessage& a_message)
                     }
                     if (showingCounter) {
                         // Accept during counter = accept the counter-offer
-                        logger::info("BarterOfferMenu: Accept pressed in counter state - accepting counter");
+                        DbgLog("BarterOfferMenu: Accept pressed in counter state - accepting counter");
                         inputCooldown = 0.4f;
                         SKSE::GetTaskInterface()->AddTask([]() {
                             BarterManager::GetSingleton()->OnCounterResponse(0);
                         });
                         return RE::UI_MESSAGE_RESULTS::kHandled;
                     }
-                    logger::info("BarterOfferMenu: Accept pressed - submitting offer");
+                    DbgLog("BarterOfferMenu: Accept pressed - submitting offer");
                     if (uiMovie) {
                         RE::GFxValue sliderVal;
                         uiMovie->GetVariable(&sliderVal, "_root.sliderValue");
@@ -852,6 +929,7 @@ RE::UI_MESSAGE_RESULTS BarterOfferMenu::ProcessMessage(RE::UIMessage& a_message)
                     (eventStr == userEvents->prevPage || eventStr == userEvents->nextPage)) {
                     int dir = (eventStr == userEvents->prevPage) ? -5 : 5;
                     if (uiMovie) {
+                        g_step5Pending = true;
                         RE::GFxValue arg;
                         arg.SetNumber(static_cast<double>(dir));
                         uiMovie->Invoke("_root.adjustSlider", nullptr, &arg, 1);
@@ -864,6 +942,7 @@ RE::UI_MESSAGE_RESULTS BarterOfferMenu::ProcessMessage(RE::UIMessage& a_message)
                     (eventStr == userEvents->leftEquip || eventStr == userEvents->rightEquip)) {
                     int dir = (eventStr == userEvents->leftEquip) ? -5 : 5;
                     if (uiMovie) {
+                        g_step5Pending = true;
                         RE::GFxValue arg;
                         arg.SetNumber(static_cast<double>(dir));
                         uiMovie->Invoke("_root.adjustSlider", nullptr, &arg, 1);
@@ -915,7 +994,7 @@ RE::UI_MESSAGE_RESULTS BarterOfferMenu::ProcessMessage(RE::UIMessage& a_message)
             // make the freshly opened window blink and vanish. Only honor kHide
             // when the barter is truly idle.
             if (BarterManager::GetSingleton()->GetState() != BarterState::Idle) {
-                logger::info("BarterOfferMenu: swallowing stale kHide (state != Idle) to prevent blink");
+                DbgLog("BarterOfferMenu: swallowing stale kHide (state != Idle) to prevent blink");
                 return RE::UI_MESSAGE_RESULTS::kHandled;
             }
             break;
@@ -934,6 +1013,7 @@ void BarterOfferMenu::SetOfferData(const OfferData& data) {
 
     // Reset all state for a fresh offer
     currentIsBuying = data.isBuying;
+    currentRelationship = data.relationship;
     relMarkerCurX = -1.0f;  // re-init the meter marker so it eases in from center
     showingCounter = false;
     showingResult = false;
@@ -944,7 +1024,7 @@ void BarterOfferMenu::SetOfferData(const OfferData& data) {
     hoveredButton = -1;
     inputCooldown = 0.3f;  // Prevent the activation key from immediately submitting
 
-    logger::info("BarterOfferMenu::SetOfferData - item='{}', basePrice={}, effectivePrice={}, "
+    DbgLog("BarterOfferMenu::SetOfferData - item='{}', basePrice={}, effectivePrice={}, "
         "merchant='{}', personality='{}', relationship={}, slider=[{}%..{}%]",
         data.itemName, data.basePrice, data.effectivePrice,
         data.merchantName, data.personalityName, data.relationship,
@@ -957,27 +1037,33 @@ void BarterOfferMenu::SetOfferData(const OfferData& data) {
     args[3].SetString(data.merchantName.c_str());
     args[4].SetString(data.personalityName.c_str());
     args[5].SetNumber(data.relationship);
-    // Slider: min=0, max=effectivePrice * kOverMarketCapMult. Allows offering well
-    // above market (when buying) or asking well above market (when selling).
-    args[6].SetNumber(0);
-    int maxOffer = static_cast<int>(std::ceil(data.effectivePrice * kOverMarketCapMult));
-    if (maxOffer < 2) maxOffer = 2;
+    // Slider bounds come from the negotiated haggle range AROUND the (possibly price-
+    // hiked) market value - not a flat 0..3x. data.sliderMin/Max are fractions of the
+    // effective price from ComputeHaggleRange (relationship + personality + perks), so
+    // the player can only push as far below/above market as their standing/skill earns.
+    // Starting point is always the market/effective value (slider seeds to it in AS).
+    const double eff = static_cast<double>(data.effectivePrice);
+    int minOffer = static_cast<int>(std::floor(eff * (1.0 + data.sliderMin)));
+    int maxOffer = static_cast<int>(std::ceil(eff * (1.0 + data.sliderMax)));
+    if (minOffer < 0) minOffer = 0;                        // never negative gold
+    if (maxOffer < minOffer + 1) maxOffer = minOffer + 1;  // always leave a usable span
+    args[6].SetNumber(static_cast<double>(minOffer));
     args[7].SetNumber(static_cast<double>(maxOffer));
     args[8].SetBoolean(data.hasIntimidationPerk);
     args[9].SetNumber(data.acceptanceChance);
 
-    logger::debug("BarterOfferMenu: Invoking _root.SetOfferData with 10 args");
+        DbgLog("BarterOfferMenu: Invoking _root.SetOfferData with 10 args");
     uiMovie->Invoke("_root.SetOfferData", nullptr, args, 10);
 
     RE::GFxValue stateArg;
     stateArg.SetString("offer");
-    logger::debug("BarterOfferMenu: Invoking _root.setButtonState('offer')");
+        DbgLog("BarterOfferMenu: Invoking _root.setButtonState('offer')");
     uiMovie->Invoke("_root.setButtonState", nullptr, &stateArg, 1);
 
     // Diagnostic: verify button visibility after setButtonState
     RE::GFxValue btnVis;
     if (uiMovie->GetVariable(&btnVis, "_root.btn_submit._visible")) {
-        logger::info("BarterOfferMenu: btn_submit._visible = {}", btnVis.GetBool());
+        DbgLog("BarterOfferMenu: btn_submit._visible = {}", btnVis.GetBool());
         if (!btnVis.GetBool()) {
             // AS function may have failed - force buttons visible from C++
             logger::warn("BarterOfferMenu: Buttons not visible after setButtonState - forcing from C++");
@@ -992,7 +1078,7 @@ void BarterOfferMenu::SetOfferData(const OfferData& data) {
     }
     RE::GFxValue btnAlpha;
     if (uiMovie->GetVariable(&btnAlpha, "_root.btn_submit._alpha")) {
-        logger::info("BarterOfferMenu: btn_submit._alpha = {}", btnAlpha.GetNumber());
+        DbgLog("BarterOfferMenu: btn_submit._alpha = {}", btnAlpha.GetNumber());
     }
 
     auto setHtml = [this](const char* fieldPath, const std::string& html) {
@@ -1054,11 +1140,11 @@ void BarterOfferMenu::SetOfferData(const OfferData& data) {
         uiMovie->SetVariable("_root.coinIcon._visible", showCoin);
     }
     PositionCoin();
-    int maxOfferDisplay = static_cast<int>(std::ceil(data.effectivePrice * kOverMarketCapMult));
-    if (maxOfferDisplay < 2) maxOfferDisplay = 2;
+    // Track end labels reflect the actual negotiable range (min..max gold), so the
+    // player can see how much room their standing/skill bought on each side of market.
     setHtml("_root.SliderText.htmlText",
         makeHtml("$EverywhereMediumFont", 9, "#C8C8C8",
-            std::format("0 gold                    {} gold", maxOfferDisplay)));
+            std::format("{} gold                    {} gold", minOffer, maxOffer)));
 
     // Acceptance chance indicator (colored by likelihood, same band as the live preview)
     {
@@ -1167,7 +1253,7 @@ void BarterOfferMenu::SetOfferData(const OfferData& data) {
     setHtml("_root.btn_continue.labelField.htmlText",
         makeHtml("$EverywhereMediumFont", 9, "#FFFFFF", "Continue"));
 
-    logger::info("BarterOfferMenu: SetOfferData applied ({})", data.itemName);
+    DbgLog("BarterOfferMenu: SetOfferData applied ({})", data.itemName);
 }
 
 void BarterOfferMenu::UpdateRelationshipMeter(int relationship) {
@@ -1190,6 +1276,15 @@ void BarterOfferMenu::UpdateRelationshipMeter(int relationship) {
         relMarkerCurX = 60.0f;  // start from the neutral midpoint for an intro slide
     }
     setVar("_root.relBarMC.marker._x", relMarkerCurX);
+}
+
+void BarterOfferMenu::UpdateRelationship(int relationship) {
+    currentRelationship = relationship;
+    // Only animate the meter while the offer view is actually showing; if we're on the
+    // counter/result screen the stored value is re-applied by RestoreOfferUI on return.
+    if (!showingCounter && !showingResult) {
+        UpdateRelationshipMeter(relationship);
+    }
 }
 
 void BarterOfferMenu::SetCounterOffer(int amount, int patience) {
@@ -1269,7 +1364,7 @@ void BarterOfferMenu::SetCounterOffer(int amount, int patience) {
     // Button hints for counter state (placed glyph icons)
     ApplyHintCells(1);
 
-    logger::info("BarterOfferMenu: SetCounterOffer - {} gold, patience {}", amount, patience);
+    DbgLog("BarterOfferMenu: SetCounterOffer - {} gold, patience {}", amount, patience);
 }
 
 void BarterOfferMenu::SetResult(bool accepted, int goldAmount, int relDelta) {
@@ -1464,7 +1559,12 @@ void BarterOfferMenu::RestoreOfferUI() {
     // Restore input hints for offer state (placed glyph icons)
     ApplyHintCells(0);
 
-    logger::info("BarterOfferMenu: RestoreOfferUI - back to offer state");
+    // Re-apply the meter from the latest standing so a relationship change that happened
+    // while the result/counter screen was up (e.g. a failed intimidation) is reflected
+    // the moment we return to the offer view.
+    UpdateRelationshipMeter(currentRelationship);
+
+    DbgLog("BarterOfferMenu: RestoreOfferUI - back to offer state");
 }
 
 void BarterOfferMenu::FxDelegateCallback::Accept(CallbackProcessor* a_cbReg) {
@@ -1477,7 +1577,7 @@ void BarterOfferMenu::FxDelegateCallback::Accept(CallbackProcessor* a_cbReg) {
 void BarterOfferMenu::OnOfferSubmit(const RE::FxDelegateArgs& a_params) {
     if (a_params.GetArgCount() < 1) return;
     int offeredPrice = static_cast<int>(a_params[0].GetNumber());
-    logger::info("BarterOfferMenu: OfferSubmit received - price={}", offeredPrice);
+    DbgLog("BarterOfferMenu: OfferSubmit received - price={}", offeredPrice);
     SKSE::GetTaskInterface()->AddTask([offeredPrice]() {
         BarterManager::GetSingleton()->OnPlayerOffer(offeredPrice);
     });
@@ -1486,21 +1586,21 @@ void BarterOfferMenu::OnOfferSubmit(const RE::FxDelegateArgs& a_params) {
 void BarterOfferMenu::OnCounterResponse(const RE::FxDelegateArgs& a_params) {
     if (a_params.GetArgCount() < 1) return;
     int response = static_cast<int>(a_params[0].GetNumber());
-    logger::info("BarterOfferMenu: CounterResponse received - response={}", response);
+    DbgLog("BarterOfferMenu: CounterResponse received - response={}", response);
     SKSE::GetTaskInterface()->AddTask([response]() {
         BarterManager::GetSingleton()->OnCounterResponse(response);
     });
 }
 
 void BarterOfferMenu::OnIntimidateAttempt(const RE::FxDelegateArgs&) {
-    logger::info("BarterOfferMenu: IntimidateAttempt received");
+    DbgLog("BarterOfferMenu: IntimidateAttempt received");
     SKSE::GetTaskInterface()->AddTask([]() {
         BarterManager::GetSingleton()->OnIntimidateAttempt();
     });
 }
 
 void BarterOfferMenu::OnClose(const RE::FxDelegateArgs&) {
-    logger::info("BarterOfferMenu: CloseMenu received from SWF");
+    DbgLog("BarterOfferMenu: CloseMenu received from SWF");
     SKSE::GetTaskInterface()->AddTask([]() {
         BarterManager::GetSingleton()->OnCancelled();
     });
@@ -1510,12 +1610,12 @@ void BarterOfferMenu::OnClose(const RE::FxDelegateArgs&) {
 
 bool ScaleformUIImpl::Initialize() {
     BarterOfferMenu::Register();
-    logger::info("ScaleformUIImpl: BarterOfferMenu registered");
+    DbgLog("ScaleformUIImpl: BarterOfferMenu registered");
     return true;
 }
 
 void ScaleformUIImpl::ShowOffer(const OfferData& data) {
-    logger::info("ScaleformUIImpl::ShowOffer called for '{}'", data.itemName);
+    DbgLog("ScaleformUIImpl::ShowOffer called for '{}'", data.itemName);
 
     // Store the data for deferred application - AdvanceMovie will pick it up
     BarterOfferMenu::pendingOfferData = data;
@@ -1527,12 +1627,12 @@ void ScaleformUIImpl::ShowOffer(const OfferData& data) {
         auto menu = ui->GetMenu<BarterOfferMenu>(BarterOfferMenu::MENU_NAME);
         if (menu) {
             // Menu already exists, apply data directly
-            logger::info("ScaleformUIImpl: Menu already exists, setting offer data directly");
+            DbgLog("ScaleformUIImpl: Menu already exists, setting offer data directly");
             menu->SetOfferData(data);
             BarterOfferMenu::pendingOfferData.reset();
         } else {
             // Menu doesn't exist yet - Show() will create it, AdvanceMovie will apply pending data
-            logger::info("ScaleformUIImpl: Showing menu, data will be applied in AdvanceMovie");
+            DbgLog("ScaleformUIImpl: Showing menu, data will be applied in AdvanceMovie");
             BarterOfferMenu::Show();
         }
     });
@@ -1562,6 +1662,17 @@ void ScaleformUIImpl::ShowResult(bool accepted, int goldAmount, int relDelta) {
     });
 }
 
+void ScaleformUIImpl::UpdateRelationship(int effectiveRelationship) {
+    SKSE::GetTaskInterface()->AddUITask([effectiveRelationship]() {
+        auto* ui = RE::UI::GetSingleton();
+        if (!ui) return;
+        auto menu = ui->GetMenu<BarterOfferMenu>(BarterOfferMenu::MENU_NAME);
+        if (menu) {
+            menu->UpdateRelationship(effectiveRelationship);
+        }
+    });
+}
+
 void ScaleformUIImpl::Hide() {
     SKSE::GetTaskInterface()->AddUITask([]() {
         // Guard against a stale close: if the player started a new barter
@@ -1571,7 +1682,7 @@ void ScaleformUIImpl::Hide() {
         // and vanish. Only actually close when the barter is truly idle.
         auto st = BarterManager::GetSingleton()->GetState();
         if (st != BarterState::Idle) {
-            logger::info("BarterOfferMenu: Skipping stale Hide - new interaction active (state={})",
+            DbgLog("BarterOfferMenu: Skipping stale Hide - new interaction active (state={})",
                 static_cast<int>(st));
             return;
         }

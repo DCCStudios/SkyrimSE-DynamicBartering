@@ -122,6 +122,9 @@ CHAR_HINT_LBL_1 = 154
 CHAR_HINT_LBL_2 = 155
 CHAR_HINT_LBL_3 = 156
 CHAR_HINT_LBL_4 = 157
+# Extra hint label for the gamepad-only "shoulder bumpers move by 5" cue (id chosen
+# from the free 166-199 gap; button-bg char ids start at 200).
+CHAR_HINT_LBL_5 = 166
 # Relationship meter parts wrapped in MovieClips so _x/_xscale/_visible animate
 # reliably (bare shapes don't honor these in this GFx build, like the slider handle).
 CHAR_REL_BAR_FILL_MC = 157
@@ -2171,7 +2174,8 @@ def build_swf():
     # Hint-row labels. Each sits just right of a placed keybind glyph shape. Inline
     # <img> glyphs do NOT render in this SWF, so the hint row is built from placed
     # glyph shapes (toggled by device in C++) + these small left-aligned labels.
-    for _hint_lbl_id in (CHAR_HINT_LBL_1, CHAR_HINT_LBL_2, CHAR_HINT_LBL_3, CHAR_HINT_LBL_4):
+    for _hint_lbl_id in (CHAR_HINT_LBL_1, CHAR_HINT_LBL_2, CHAR_HINT_LBL_3, CHAR_HINT_LBL_4,
+                         CHAR_HINT_LBL_5):
         tags += make_define_edit_text(
             char_id=_hint_lbl_id,
             bounds=(0, 78 * TWIPS, 0, 16 * TWIPS),
@@ -2525,6 +2529,15 @@ def build_swf():
     place_hint_at("g_kbd_arrows", slot3_x, adjust_hint_y, "hg_ar",  is_kbd=True, wide_kbd=True)
     place_hint_at("g_pad",        slot3_x, adjust_hint_y, "hg_pad")
 
+    # Slot 3b: shoulder bumpers move the slider by 5 (gamepad only, right of "Adjust").
+    # Both Xbox (LB/RB) and PlayStation (L1/R1) variants are placed hidden; C++ shows
+    # the right pair for the active icon style and hides them all for keyboard.
+    bump_x0 = slot3_x + 86
+    place_hint_at("g_xb_lb", bump_x0,      adjust_hint_y, "hg_lb")
+    place_hint_at("g_xb_rb", bump_x0 + 24, adjust_hint_y, "hg_rb")
+    place_hint_at("g_ps_l1", bump_x0,      adjust_hint_y, "hg_l1")
+    place_hint_at("g_ps_r1", bump_x0 + 24, adjust_hint_y, "hg_r1")
+
     # Counter-offer state alternate glyphs (reuse slot positions)
     # Slot 1 becomes Re-offer in counter state: R key / X xbox / Square PS
     place_hint_at("g_kbd_r",     slot1_x, btn_hint_y, "hg_r",   is_kbd=True)
@@ -2543,6 +2556,8 @@ def build_swf():
     tags += make_place_object2(CHAR_HINT_LBL_2, depth, slot1_x + lbl_dx_1, btn_hint_lbl_y, "HintLbl2"); depth += 1
     tags += make_place_object2(CHAR_HINT_LBL_3, depth, slot2_x + lbl_dx_2, btn_hint_lbl_y, "HintLbl3"); depth += 1
     tags += make_place_object2(CHAR_HINT_LBL_4, depth, slot3_x + lbl_dx_3, adjust_hint_lbl_y, "HintLbl4"); depth += 1
+    # "by 5" label for the bumper cue, just right of the two bumper glyphs (gamepad only).
+    tags += make_place_object2(CHAR_HINT_LBL_5, depth, bump_x0 + 48, adjust_hint_lbl_y, "HintLbl5"); depth += 1
 
     # ===================================================================
     # ACTIONSCRIPT

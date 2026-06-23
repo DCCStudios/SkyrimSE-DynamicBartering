@@ -3,6 +3,7 @@
 #include "BarterManager.h"
 #include "UI/ScaleformUI.h"
 #include "Settings.h"
+#include "DebugLog.h"
 
 bool PrismaUIImpl::Initialize() {
     auto pluginHandle = GetModuleHandle(L"PrismaUI.dll");
@@ -82,7 +83,7 @@ void PrismaUIImpl::ShowOffer(const OfferData& data) {
     };
 
     std::string payload = j.dump();
-    logger::info("PrismaUI::ShowOffer - '{}' (payload {} bytes)", data.itemName, payload.size());
+    DbgLog("PrismaUI::ShowOffer - '{}' (payload {} bytes)", data.itemName, payload.size());
 
     api->SetOrder(view, 100);
     api->Show(view);
@@ -95,7 +96,7 @@ void PrismaUIImpl::ShowOffer(const OfferData& data) {
 
     api->InteropCall(view, "ShowOffer", payload.c_str());
 
-    logger::info("PrismaUI::ShowOffer - done (hidden={}, hasFocus={}, focusOk={})",
+    DbgLog("PrismaUI::ShowOffer - done (hidden={}, hasFocus={}, focusOk={})",
         api->IsHidden(view) ? 1 : 0, api->HasFocus(view) ? 1 : 0, focusOk ? 1 : 0);
 }
 
@@ -120,7 +121,7 @@ void PrismaUIImpl::Hide() {
 }
 
 void PrismaUIImpl::OnDomReady(PrismaView) {
-    logger::info("PrismaUI: DOM ready - JS functions should now be available");
+    DbgLog("PrismaUI: DOM ready - JS functions should now be available");
 }
 
 void PrismaUIImpl::OnBarterResult(const char* argument) {

@@ -35,9 +35,11 @@ private:
     // Cached state to avoid redundant (expensive) SetVariable churn each frame.
     static inline bool lastPromptVisible{ true };
     static inline int  lastGlyph{ -1 };          // 0=xbox Y, 1=ps triangle, 2=keyboard B
+    static inline int  lastHintGlyph{ -2 };      // barter-key glyph drawn in the cart hint
     static inline bool lastPanelVisible{ true };
     static inline int  lastCartCount{ -1 };
     static inline int  lastNet{ -2147483647 };  // sentinel: force first panel rebuild
+    static inline int  lastRelMilli{ -2147483647 };  // relationship price effect (per-mille)
     static inline bool lastMeterVisible{ true };
     static inline float lastMeterFrac{ -1.0f };
 

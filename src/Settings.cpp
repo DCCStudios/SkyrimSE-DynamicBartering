@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "Settings.h"
+#include "DebugLog.h"
 
 std::string Settings::GetConfigPath() const {
     return "Data/SKSE/Plugins/DynamicBartering/DynamicBartering.ini";
@@ -26,9 +27,15 @@ void Settings::Load() {
     popupDelayMs = static_cast<int>(ini.GetLongValue("General", "iPopupDelayMs", popupDelayMs));
     skipBelowThreshold = ini.GetBoolValue("General", "bSkipBelowThreshold", skipBelowThreshold);
     valueThreshold = static_cast<int>(ini.GetLongValue("General", "iValueThreshold", valueThreshold));
+    blockQuickBuy = ini.GetBoolValue("General", "bBlockQuickBuy", blockQuickBuy);
+    cartVisibleByDefault = ini.GetBoolValue("General", "bCartVisibleByDefault", cartVisibleByDefault);
+    tutorialEnabled = ini.GetBoolValue("General", "bTutorialEnabled", tutorialEnabled);
+    tutorialCartSeen = ini.GetBoolValue("General", "bTutorialCartSeen", tutorialCartSeen);
+    tutorialOfferSeen = ini.GetBoolValue("General", "bTutorialOfferSeen", tutorialOfferSeen);
 
     // Cart
     cartHoldThreshold = static_cast<float>(ini.GetDoubleValue("Cart", "fHoldThreshold", cartHoldThreshold));
+    cartHoldFillTime = static_cast<float>(ini.GetDoubleValue("Cart", "fHoldFillTime", cartHoldFillTime));
     cartPanelX = static_cast<float>(ini.GetDoubleValue("Cart", "fPanelX", cartPanelX));
     cartPanelY = static_cast<float>(ini.GetDoubleValue("Cart", "fPanelY", cartPanelY));
     cartPanelScale = static_cast<float>(ini.GetDoubleValue("Cart", "fPanelScale", cartPanelScale));
@@ -48,6 +55,13 @@ void Settings::Load() {
     useVanillaBasePrice = ini.GetBoolValue("Pricing", "bUseVanillaBasePrice", useVanillaBasePrice);
     stolenItemPenalty = static_cast<float>(ini.GetDoubleValue("Pricing", "fStolenItemPenalty", stolenItemPenalty));
     fencePerkReduction = static_cast<float>(ini.GetDoubleValue("Pricing", "fFencePerkReduction", fencePerkReduction));
+    relHaggleRangeWeight = static_cast<float>(ini.GetDoubleValue("Pricing", "fRelHaggleRangeWeight", relHaggleRangeWeight));
+    neutralHaggleScale = static_cast<float>(ini.GetDoubleValue("Pricing", "fNeutralHaggleScale", neutralHaggleScale));
+    maxBuyDiscount = static_cast<float>(ini.GetDoubleValue("Pricing", "fMaxBuyDiscount", maxBuyDiscount));
+    maxSellMarkup = static_cast<float>(ini.GetDoubleValue("Pricing", "fMaxSellMarkup", maxSellMarkup));
+    specialtyHaggling = ini.GetBoolValue("Pricing", "bSpecialtyHaggling", specialtyHaggling);
+    specialtyWeight = static_cast<float>(ini.GetDoubleValue("Pricing", "fSpecialtyWeight", specialtyWeight));
+    showRelationshipInVanillaPrices = ini.GetBoolValue("Pricing", "bShowRelationshipInVanillaPrices", showRelationshipInVanillaPrices);
 
     // Relationships
     relationshipPricing = ini.GetBoolValue("Relationships", "bRelationshipPricing", relationshipPricing);
@@ -58,10 +72,28 @@ void Settings::Load() {
     relMin = static_cast<int>(ini.GetLongValue("Relationships", "iRelMin", relMin));
     priceJackThreshold = static_cast<int>(ini.GetLongValue("Relationships", "iPriceJackThreshold", priceJackThreshold));
     priceJackIntensity = static_cast<float>(ini.GetDoubleValue("Relationships", "fPriceJackIntensity", priceJackIntensity));
+    priceBreakThreshold = static_cast<int>(ini.GetLongValue("Relationships", "iPriceBreakThreshold", priceBreakThreshold));
+    milestoneReputation = ini.GetBoolValue("Relationships", "bMilestoneReputation", milestoneReputation);
 
     // Personalities
     counterOfferBaseChance = static_cast<float>(ini.GetDoubleValue("Personalities", "fCounterOfferBaseChance", counterOfferBaseChance));
     counterOfferPatience = static_cast<int>(ini.GetLongValue("Personalities", "iCounterOfferPatience", counterOfferPatience));
+
+    // Sound
+    enableSounds = ini.GetBoolValue("Sound", "bEnableSounds", enableSounds);
+    soundVolume = static_cast<float>(ini.GetDoubleValue("Sound", "fSoundVolume", soundVolume));
+    useVanillaCartSounds = ini.GetBoolValue("Sound", "bUseVanillaCartSounds", useVanillaCartSounds);
+
+    // CHIM
+    enableChim = ini.GetBoolValue("CHIM", "bEnableChim", enableChim);
+    chimServerUrl = ini.GetValue("CHIM", "sServerUrl", chimServerUrl.c_str());
+    chimTimeoutMs = static_cast<int>(ini.GetLongValue("CHIM", "iTimeoutMs", chimTimeoutMs));
+    chimImmediateReactions = ini.GetBoolValue("CHIM", "bImmediateReactions", chimImmediateReactions);
+    chimReactionCooldownSec = static_cast<int>(ini.GetLongValue("CHIM", "iReactionCooldownSec", chimReactionCooldownSec));
+    chimCounterCooldownSec = static_cast<int>(ini.GetLongValue("CHIM", "iCounterCooldownSec", chimCounterCooldownSec));
+    chimUnpauseOfferWindow = ini.GetBoolValue("CHIM", "bUnpauseOfferWindow", chimUnpauseOfferWindow);
+    chimSendDelaySec = static_cast<int>(ini.GetLongValue("CHIM", "iSendDelaySec", chimSendDelaySec));
+    chimLiveContextLogging = ini.GetBoolValue("CHIM", "bLiveContextLogging", chimLiveContextLogging);
 
     // Debug
     debugLogging = ini.GetBoolValue("Debug", "bDebugLogging", debugLogging);
@@ -83,9 +115,15 @@ void Settings::Save() {
     ini.SetLongValue("General", "iPopupDelayMs", popupDelayMs);
     ini.SetBoolValue("General", "bSkipBelowThreshold", skipBelowThreshold);
     ini.SetLongValue("General", "iValueThreshold", valueThreshold);
+    ini.SetBoolValue("General", "bBlockQuickBuy", blockQuickBuy);
+    ini.SetBoolValue("General", "bCartVisibleByDefault", cartVisibleByDefault);
+    ini.SetBoolValue("General", "bTutorialEnabled", tutorialEnabled);
+    ini.SetBoolValue("General", "bTutorialCartSeen", tutorialCartSeen);
+    ini.SetBoolValue("General", "bTutorialOfferSeen", tutorialOfferSeen);
 
     // Cart
     ini.SetDoubleValue("Cart", "fHoldThreshold", cartHoldThreshold);
+    ini.SetDoubleValue("Cart", "fHoldFillTime", cartHoldFillTime);
     ini.SetDoubleValue("Cart", "fPanelX", cartPanelX);
     ini.SetDoubleValue("Cart", "fPanelY", cartPanelY);
     ini.SetDoubleValue("Cart", "fPanelScale", cartPanelScale);
@@ -105,6 +143,13 @@ void Settings::Save() {
     ini.SetBoolValue("Pricing", "bUseVanillaBasePrice", useVanillaBasePrice);
     ini.SetDoubleValue("Pricing", "fStolenItemPenalty", stolenItemPenalty);
     ini.SetDoubleValue("Pricing", "fFencePerkReduction", fencePerkReduction);
+    ini.SetDoubleValue("Pricing", "fRelHaggleRangeWeight", relHaggleRangeWeight);
+    ini.SetDoubleValue("Pricing", "fNeutralHaggleScale", neutralHaggleScale);
+    ini.SetDoubleValue("Pricing", "fMaxBuyDiscount", maxBuyDiscount);
+    ini.SetDoubleValue("Pricing", "fMaxSellMarkup", maxSellMarkup);
+    ini.SetBoolValue("Pricing", "bSpecialtyHaggling", specialtyHaggling);
+    ini.SetDoubleValue("Pricing", "fSpecialtyWeight", specialtyWeight);
+    ini.SetBoolValue("Pricing", "bShowRelationshipInVanillaPrices", showRelationshipInVanillaPrices);
 
     // Relationships
     ini.SetBoolValue("Relationships", "bRelationshipPricing", relationshipPricing);
@@ -115,10 +160,28 @@ void Settings::Save() {
     ini.SetLongValue("Relationships", "iRelMin", relMin);
     ini.SetLongValue("Relationships", "iPriceJackThreshold", priceJackThreshold);
     ini.SetDoubleValue("Relationships", "fPriceJackIntensity", priceJackIntensity);
+    ini.SetLongValue("Relationships", "iPriceBreakThreshold", priceBreakThreshold);
+    ini.SetBoolValue("Relationships", "bMilestoneReputation", milestoneReputation);
 
     // Personalities
     ini.SetDoubleValue("Personalities", "fCounterOfferBaseChance", counterOfferBaseChance);
     ini.SetLongValue("Personalities", "iCounterOfferPatience", counterOfferPatience);
+
+    // Sound
+    ini.SetBoolValue("Sound", "bEnableSounds", enableSounds);
+    ini.SetDoubleValue("Sound", "fSoundVolume", soundVolume);
+    ini.SetBoolValue("Sound", "bUseVanillaCartSounds", useVanillaCartSounds);
+
+    // CHIM
+    ini.SetBoolValue("CHIM", "bEnableChim", enableChim);
+    ini.SetValue("CHIM", "sServerUrl", chimServerUrl.c_str());
+    ini.SetLongValue("CHIM", "iTimeoutMs", chimTimeoutMs);
+    ini.SetBoolValue("CHIM", "bImmediateReactions", chimImmediateReactions);
+    ini.SetLongValue("CHIM", "iReactionCooldownSec", chimReactionCooldownSec);
+    ini.SetLongValue("CHIM", "iCounterCooldownSec", chimCounterCooldownSec);
+    ini.SetBoolValue("CHIM", "bUnpauseOfferWindow", chimUnpauseOfferWindow);
+    ini.SetLongValue("CHIM", "iSendDelaySec", chimSendDelaySec);
+    ini.SetBoolValue("CHIM", "bLiveContextLogging", chimLiveContextLogging);
 
     // Debug
     ini.SetBoolValue("Debug", "bDebugLogging", debugLogging);
@@ -127,5 +190,5 @@ void Settings::Save() {
     auto path = GetConfigPath();
     std::filesystem::create_directories(std::filesystem::path(path).parent_path());
     ini.SaveFile(path.c_str());
-    logger::info("Settings saved to {}", path);
+    DbgLog("Settings saved to {}", path);
 }

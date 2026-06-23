@@ -34,6 +34,7 @@ target_include_directories(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
     PRIVATE
         nlohmann_json::nlohmann_json
+        winhttp
 )
 
 if(DEFINED OUTPUT_FOLDER)
@@ -53,6 +54,17 @@ if(DEFINED OUTPUT_FOLDER)
             TARGET "${PROJECT_NAME}"
             POST_BUILD
             COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different "${CMAKE_SOURCE_DIR}/config" "${DLL_FOLDER}/DynamicBartering"
+            VERBATIM
+        )
+    endif()
+
+    # Default data files (merchant_dispositions.json etc.) ship next to the DLL so
+    # personality + specialty detection has its hand-authored vanilla coverage.
+    if(EXISTS "${CMAKE_SOURCE_DIR}/data")
+        add_custom_command(
+            TARGET "${PROJECT_NAME}"
+            POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different "${CMAKE_SOURCE_DIR}/data" "${DLL_FOLDER}/DynamicBartering"
             VERBATIM
         )
     endif()

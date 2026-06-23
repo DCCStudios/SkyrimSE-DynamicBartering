@@ -1,16 +1,21 @@
 set(headers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PCH.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Settings.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/BarterSounds.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Hooks.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BarterManager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CartManager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PriceCalculator.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RelationshipManager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MerchantPersonality.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MerchantCategory.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MilestoneManager.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Tutorial.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DealMemory.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CounterOffer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PerkDetector.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PriceJack.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Integration/ChimBridge.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/UI/UIBridge.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/UI/ScaleformUI.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/UI/PrismaUI.h

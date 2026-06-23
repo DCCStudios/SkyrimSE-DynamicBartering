@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "MerchantPersonality.h"
+#include "DebugLog.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <filesystem>
@@ -68,6 +69,7 @@ MerchantPersonality MerchantPersonality::FromTrait(Trait t) {
             p.priceJackMult = 1.5f;
             p.patienceRounds = 2;
             p.enjoysHaggling = false;
+            p.haggleRangeScale = 0.6f;  // tight-fisted: standing barely widens the range
             break;
         case Trait::Fair:
             p.acceptanceMod = 0.0f;
@@ -77,6 +79,7 @@ MerchantPersonality MerchantPersonality::FromTrait(Trait t) {
             p.priceJackMult = 1.0f;
             p.patienceRounds = 3;
             p.enjoysHaggling = false;
+            p.haggleRangeScale = 1.0f;
             break;
         case Trait::Generous:
             p.acceptanceMod = 10.0f;
@@ -86,6 +89,7 @@ MerchantPersonality MerchantPersonality::FromTrait(Trait t) {
             p.priceJackMult = 0.5f;
             p.patienceRounds = 4;
             p.enjoysHaggling = false;
+            p.haggleRangeScale = 1.4f;  // kind-hearted: standing opens up generous deals
             break;
         case Trait::Sleazy:
             p.acceptanceMod = 5.0f;
@@ -95,6 +99,7 @@ MerchantPersonality MerchantPersonality::FromTrait(Trait t) {
             p.priceJackMult = 0.8f;
             p.patienceRounds = 4;
             p.enjoysHaggling = true;
+            p.haggleRangeScale = 1.3f;  // loves a good haggle: lots of give either way
             break;
         case Trait::Stern:
             p.acceptanceMod = -10.0f;
@@ -104,6 +109,7 @@ MerchantPersonality MerchantPersonality::FromTrait(Trait t) {
             p.priceJackMult = 1.3f;
             p.patienceRounds = 1;
             p.enjoysHaggling = false;
+            p.haggleRangeScale = 0.6f;  // take-it-or-leave-it: standing barely matters
             break;
         case Trait::Timid:
             p.acceptanceMod = 15.0f;
@@ -113,6 +119,7 @@ MerchantPersonality MerchantPersonality::FromTrait(Trait t) {
             p.priceJackMult = 0.7f;
             p.patienceRounds = 4;
             p.enjoysHaggling = false;
+            p.haggleRangeScale = 1.2f;  // eager to please: standing opens the range up
             break;
     }
     return p;
@@ -134,7 +141,7 @@ MerchantPersonality MerchantPersonality::DetectFromActor(RE::Actor* merchant) {
         // First try exact match
         auto it = g_dispositionMap.find(nameLower);
         if (it != g_dispositionMap.end()) {
-            logger::trace("MerchantPersonality: Exact match for '{}' -> {}", name, TraitToString(it->second));
+            DbgLog("MerchantPersonality: Exact match for '{}' -> {}", name, TraitToString(it->second));
             return FromTrait(it->second);
         }
         // Then try: does the NPC name START WITH any known disposition key?
@@ -156,7 +163,7 @@ MerchantPersonality MerchantPersonality::DetectFromActor(RE::Actor* merchant) {
             }
         }
         if (found) {
-            logger::trace("MerchantPersonality: Substring match for '{}' (matched '{}' len {}) -> {}",
+            DbgLog("MerchantPersonality: Substring match for '{}' (matched '{}' len {}) -> {}",
                 name, "", bestLen, TraitToString(bestMatch));
             return FromTrait(bestMatch);
         }

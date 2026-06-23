@@ -16,11 +16,46 @@ PriceResult PriceCalculator::CalculatePrice(const PriceContext& ctx, int relatio
     if (result.effectivePrice < 1) result.effectivePrice = 1;
 
     auto perks = PerkBonuses::Detect(ctx.player);
-    result.sliderMin = settings->sliderRangeMin - perks.GetSliderRangeBonus();
-    result.sliderMax = settings->sliderRangeMax + perks.GetSliderRangeBonus();
+    ComputeHaggleRange(ctx.isBuying, relationship, ctx.personality,
+                       perks.GetSliderRangeBonus(), result.sliderMin, result.sliderMax);
     result.priceJackMultiplier = priceJackMult;
 
     return result;
+}
+
+void PriceCalculator::ComputeHaggleRange(bool isBuying, int effectiveRelationship,
+                                         const MerchantPersonality& personality,
+                                         float perkSliderBonus, float& outMin, float& outMax) {
+    auto* settings = Settings::GetSingleton();
+
+    // Neutral-standing baseline favorable room. Tightened by neutralHaggleScale and
+    // shaped by the merchant's PERSONALITY so even at 0 relationship a Greedy/Stern
+    // merchant (haggleRangeScale 0.6) opens far less than a Generous one (1.4). This is
+    // the spread you get out of the gate, before standing/perks widen it.
+    const float favorBase = std::abs(settings->sliderRangeMin) *
+                            settings->neutralHaggleScale * personality.haggleRangeScale;
+    const float unfavor = settings->sliderRangeMax + perkSliderBonus;
+
+    // Standing widens (liked) or contracts (disliked) the favorable side, scaled by
+    // the merchant's personality. relNorm in [-1, +1].
+    float relNorm = 0.0f;
+    if (settings->relationshipPricing) {
+        relNorm = std::clamp(static_cast<float>(effectiveRelationship) / 100.0f, -1.0f, 1.0f);
+    }
+    const float room = relNorm * settings->relHaggleRangeWeight * personality.haggleRangeScale;
+
+    // Favorable extent: baseline + standing room + perk bonus, floored at 0 (a
+    // strongly-disliked merchant offers no room beyond market) and capped.
+    const float cap = isBuying ? settings->maxBuyDiscount : settings->maxSellMarkup;
+    float favor = std::clamp(favorBase + room + perkSliderBonus, 0.0f, cap);
+
+    if (isBuying) {
+        outMin = -favor;     // how far below market the player may push (discount)
+        outMax = unfavor;    // may also offer above market
+    } else {
+        outMax = favor;      // how far above market the player may ask (overcharge)
+        outMin = -unfavor;
+    }
 }
 
 float PriceCalculator::CalculateAcceptanceChance(const AcceptanceContext& ctx) {
@@ -64,6 +99,12 @@ float PriceCalculator::CalculateAcceptanceChance(const AcceptanceContext& ctx) {
     // Personality modifier
     chance += ctx.personality.acceptanceMod;
 
+    // Merchant specialty: more willing on goods they deal in, more resistant on
+    // off-specialty items. specialtyFactor is roughly [-1, +1].
+    if (settings->specialtyHaggling) {
+        chance += ctx.specialtyFactor * settings->specialtyWeight;
+    }
+
     // Deal history
     if (ctx.memory) {
         int fairDeals = ctx.memory->GetConsecutiveFairDeals();
@@ -75,8 +116,22 @@ float PriceCalculator::CalculateAcceptanceChance(const AcceptanceContext& ctx) {
 
     // Greed penalty: the further the offer is in the player's favour, the less
     // likely the merchant accepts. (greed <= 0 already returned 99 above.)
+    //
+    // Relationship-driven haggling range: a liked merchant tolerates deeper
+    // player-favorable offers (the penalty per point of greed shrinks, so a better
+    // price is reachable); a disliked one resists sooner. The strength of this is
+    // bounded by the merchant's personality (haggleRangeScale), so take-it-or-leave-it
+    // traits barely budge while easygoing ones open right up.
     if (greed > 0.0f) {
-        chance -= greed * 100.0f * settings->greedFactor;
+        float effGreedFactor = settings->greedFactor;
+        if (settings->relationshipPricing) {
+            float relNorm = std::clamp(static_cast<float>(ctx.relationship) / 100.0f, -1.0f, 1.0f);
+            float influence = std::clamp(
+                relNorm * settings->relHaggleRangeWeight * ctx.personality.haggleRangeScale,
+                -0.6f, 0.8f);
+            effGreedFactor *= (1.0f - influence);
+        }
+        chance -= greed * 100.0f * effGreedFactor;
     }
 
     // Stolen item penalty

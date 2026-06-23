@@ -7,6 +7,7 @@
 #include "UI/ScaleformUI.h"
 #include "UI/BarterCartMenu.h"
 #include "Menu/ConfigMenu.h"
+#include "Integration/ChimBridge.h"
 
 namespace {
     constexpr std::uint32_t kSerializationID = 'DBRT';
@@ -57,6 +58,7 @@ namespace {
                 Hooks::Install();
                 UIBridge::GetSingleton()->Initialize();
                 ConfigMenu::Register();
+                ChimBridge::Initialize();
                 logger::info("DynamicBarteringSKSE initialized");
                 break;
             case SKSE::MessagingInterface::kInputLoaded:
