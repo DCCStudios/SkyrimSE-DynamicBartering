@@ -1,0 +1,64 @@
+; -----------------------------------------------------------------------------
+; Font Libraries
+; -----------------------------------------------------------------------------
+
+fontlib "Interface\fonts_console.swf"
+fontlib "Interface\fonts_en.swf"
+fontlib "Interface\linbiolinum_rb.swf"
+fontlib "Interface\mops.swf"
+fontlib "Interface\asteroidea.swf"
+fontlib "Interface\rosemary roman.swf"
+
+
+; -----------------------------------------------------------------------------
+; Console Font
+; -----------------------------------------------------------------------------
+
+map "$ConsoleFont"                = "Linux Biolinum" Normal
+
+
+; -----------------------------------------------------------------------------
+; UI/Menu Fonts
+; -----------------------------------------------------------------------------
+
+map "$ListFont"                   = "Mops" Normal
+map "$StartMenuFont"              = "Mops" Normal
+map "$DialogueFont"               = "Mops" Normal
+map "$EverywhereFont"             = "Mops" Normal
+map "$EverywhereBoldFont"         = "Mops" Normal
+map "$EverywhereMediumFont"       = "Mops" Normal
+
+
+; -----------------------------------------------------------------------------
+; Book Fonts
+; -----------------------------------------------------------------------------
+
+map "$SkyrimBooks"                = "Asteroidea" Normal
+
+
+; -----------------------------------------------------------------------------
+; Notes Fonts
+; -----------------------------------------------------------------------------
+
+map "$HandwrittenFont"            = "Rosemary Roman" Normal
+map "$HandwrittenBold"            = "Rosemary Roman" Normal
+
+
+; -----------------------------------------------------------------------------
+; Skyrim Vanilla Fonts
+; -----------------------------------------------------------------------------
+
+map "$DragonFont"                 = "Dragon_script" Normal
+map "$FalmerFont"                 = "Falmer" Normal
+map "$DwemerFont"                 = "Dwemer" Normal
+map "$DaedricFont"                = "Daedric" Normal
+map "$MageScriptFont"             = "Mage Script" Normal
+map "$SkyrimSymbolsFont"          = "SkyrimSymbols" Normal
+map "$SkyrimBooks_UnreadableFont" = "SkyrimBooks_Unreadable" Normal
+
+
+; -----------------------------------------------------------------------------
+; Valid Characters Range
+; -----------------------------------------------------------------------------
+
+validNameChars "`1234567890-=~!@#$%^&*():_+QWERTYUIOP[]ASDFGHJKL;'ZXCVBNM,./qwertyuiop{}\\asdfghjkl;'zxcvbnm<>?|¡¢£¤¥¦§¨©ª«®¯°²³´¶·¸¹º»¼½¾¿ÄÀÁÂÃÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþ ÿ "

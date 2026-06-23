@@ -122,7 +122,7 @@ if (!function_exists('dynBarterNarrative')) {
 /** Consolidated memory entry for a whole barter visit (paused-menu / no-SkyrimSouls
  *  path). Joins each transaction's narrative line and closes with the net gold. */
 if (!function_exists('dynBarterSessionNarrative')) {
-    function dynBarterSessionNarrative($player, $merchant, $transactions, $netGold) {
+    function dynBarterSessionNarrative($player, $merchant, $transactions, $netGold, $relationship = 0) {
         $lines = [];
         foreach ($transactions as $t) {
             $lines[] = dynBarterNarrativeLine(
@@ -145,27 +145,79 @@ if (!function_exists('dynBarterSessionNarrative')) {
             $tally = "";
         }
         $body = implode(" ", $lines);
-        return "(During this visit to {$merchant}: {$body}{$tally})";
+        $standing = dynBarterStandingPhrase($player, $merchant, $relationship);
+        $standingNote = $standing !== "" ? " At present, {$standing}." : "";
+        return "(During this visit to {$merchant}: {$body}{$tally}{$standingNote})";
+    }
+}
+
+/** Maps the mod's roughly -100..+100 relationship score to a coarse standing tier:
+ *  -3 despised, -2 hostile, -1 cold, 0 neutral, +1 warm, +2 friendly, +3 beloved. */
+if (!function_exists('dynBarterStandingTier')) {
+    function dynBarterStandingTier($rel) {
+        $r = (int)$rel;
+        if ($r <= -75) return -3;
+        if ($r <= -40) return -2;
+        if ($r <= -15) return -1;
+        if ($r <   15) return 0;
+        if ($r <   40) return 1;
+        if ($r <   75) return 2;
+        return 3;
+    }
+}
+
+/** Third-person clause describing how the merchant currently feels about the player,
+ *  woven into the memory narrative so the LLM voices later lines with the right warmth
+ *  (this is what keeps a despised merchant from greeting the player like an old friend). */
+if (!function_exists('dynBarterStandingPhrase')) {
+    function dynBarterStandingPhrase($player, $merchant, $rel) {
+        switch (dynBarterStandingTier($rel)) {
+            case -3: return "{$merchant} despises {$player} and can barely stand to deal with them";
+            case -2: return "{$merchant} is hostile toward {$player} and resents the dealing";
+            case -1: return "{$merchant} is cold and wary toward {$player}";
+            case  1: return "{$merchant} is warming to {$player}";
+            case  2: return "{$merchant} considers {$player} a valued, friendly customer";
+            case  3: return "{$merchant} adores {$player} and treasures their custom";
+            default: return "";  // neutral -> no special note
+        }
     }
 }
 
 /** A single closing remark for the merchant after a whole visit (deferred path).
- *  Tone shifts with whether they came out ahead and their personality. */
+ *  Tone shifts with their personality, whether they came out ahead, AND - crucially -
+ *  how they feel about the player: a merchant who dislikes the player stays curt even
+ *  on a profitable sale, while a beloved one is warmer than usual. */
 if (!function_exists('dynBarterSessionBark')) {
-    function dynBarterSessionBark($merchant, $personality, $netGold, $hadIntimidation) {
+    function dynBarterSessionBark($merchant, $personality, $netGold, $hadIntimidation, $relationship = 0) {
         $p = strtolower($personality);
         if ($hadIntimidation) {
             if ($p === "stern")  return dynBarterPick(["Take your goods and don't threaten me again.", "We're done here. Go."]);
             if ($p === "timid")  return dynBarterPick(["P-please, just take it and go...", "I-I hope that's everything..."]);
             return dynBarterPick(["...Just go. We're done.", "Don't make a habit of strong-arming me."]);
         }
+
+        $tier = dynBarterStandingTier($relationship);
         $net = (int)$netGold;
-        if ($net > 0) {  // player spent coin -> merchant pleased
+
+        // Disliked merchants (cold/hostile/despised) never warm up, even when the player
+        // spent coin - that mismatch ("pleasure as always, friend" while despised) is the
+        // exact thing the standing tier is here to prevent.
+        if ($tier <= -2) {
+            return dynBarterPick(["Hmph. Take your things and go.", "Our business is done. Don't linger.",
+                                  "Don't expect a smile with it.", "Just go."]);
+        }
+        if ($tier === -1) {
+            return dynBarterPick(["...That's everything, then.", "Good day to you.", "We're done here."]);
+        }
+
+        if ($net > 0) {  // player spent coin -> merchant pleased (and warmer if liked)
+            if ($tier >= 2) return dynBarterPick(["Always a joy doing business with you, friend!", "For you? A pleasure, truly. Come back soon!"]);
             if ($p === "greedy") return dynBarterPick(["Ha! Always a pleasure taking your coin.", "Pleasure doing business. Come back soon!"]);
             if ($p === "sleazy") return dynBarterPick(["Heh, pleasure as always, friend.", "Spend it while you've got it, eh?"]);
             return dynBarterPick(["A pleasure doing business with you.", "Thank you kindly. Come again."]);
         }
-        if ($net < 0) {  // merchant paid out -> grudging
+        if ($net < 0) {  // merchant paid out -> grudging (unless they truly adore the player)
+            if ($tier >= 2) return dynBarterPick(["For a friend, it's worth it. Come again.", "You always know how to find a deal with me."]);
             if ($p === "greedy") return dynBarterPick(["You drive a hard bargain, I'll give you that.", "Bah. You've cleaned out my coin purse."]);
             if ($p === "stern")  return dynBarterPick(["Hmph. Don't expect deals like that often.", "You got your coin. That's enough."]);
             return dynBarterPick(["You've a sharp tongue for trade.", "A fair bit of my coin, that was."]);
@@ -179,8 +231,15 @@ if (!function_exists('dynBarterSessionBark')) {
  * reliability; the LLM-voiced depth comes from the logged memory on the next chat).
  */
 if (!function_exists('dynBarterBarkLine')) {
-    function dynBarterBarkLine($merchant, $personality, $action, $item, $isBuying, $counterPrice = 0) {
+    function dynBarterBarkLine($merchant, $personality, $action, $item, $isBuying, $counterPrice = 0, $relationship = 0) {
         $p = strtolower($personality);
+        $tier = dynBarterStandingTier($relationship);
+
+        // A merchant who dislikes the player stays cold on otherwise-warm outcomes
+        // (a generous overpayment or a fair close) instead of gushing thanks.
+        if ($tier <= -2 && ($action === "generous" || $action === "fair" || $action === "deal_close" || $action === "counter_accept")) {
+            return dynBarterPick(["Hmph. Coin's coin, I suppose.", "Don't think this changes anything between us.", "Take it and go."]);
+        }
 
         if ($action === "counter") {
             $c = number_format((int)$counterPrice) . " gold";
@@ -314,6 +373,7 @@ if (!is_array($evt)) {
 
 $merchant     = trim((string)($evt["merchant"] ?? "")) ?: "the merchant";
 $personality  = (string)($evt["personality"] ?? "");
+$relationship = (int)($evt["relationship"] ?? 0);
 $action       = strtolower((string)($evt["action"] ?? ""));
 $item         = trim((string)($evt["item"] ?? "")) ?: "the goods";
 $marketPrice  = (int)($evt["market_price"] ?? 0);
@@ -338,7 +398,7 @@ if ($action === "session") {
     }
     $netGold = (int)($evt["net_gold"] ?? 0);
 
-    $sessNarr = dynBarterSessionNarrative($playerName, $merchant, $transactions, $netGold);
+    $sessNarr = dynBarterSessionNarrative($playerName, $merchant, $transactions, $netGold, $relationship);
     logEvent([
         "infoaction",
         $gameRequest[1] ?? time(),
@@ -367,7 +427,7 @@ if ($action === "session") {
     dynBarterRecordRow($evt, $sessNarr);
 
     if ($wantSessionBark) {
-        $line = dynBarterSessionBark($merchant, $personality, $netGold, $hadIntimidation);
+        $line = dynBarterSessionBark($merchant, $personality, $netGold, $hadIntimidation, $relationship);
         if ($line !== "") {
             dynBarterQueueBark($merchant, $line);
         }
@@ -378,7 +438,12 @@ if ($action === "session") {
 }
 
 // 1) Narrative -> merchant memory (infoaction, gamets 0 => server uses last-known time).
+//    Append the current standing so the LLM voices the memory with the right warmth.
 $narrative = dynBarterNarrative($playerName, $merchant, $action, $item, $isBuying, $isStolen, $marketPrice, $offeredPrice, $counterPrice);
+$standingPhrase = dynBarterStandingPhrase($playerName, $merchant, $relationship);
+if ($standingPhrase !== "") {
+    $narrative = rtrim($narrative, ")") . " At present, {$standingPhrase}.)";
+}
 logEvent([
     "infoaction",
     $gameRequest[1] ?? time(),
@@ -400,7 +465,7 @@ $wantBark = $bigMoment
 dynBarterRecordRow($evt, $narrative);
 
 if ($wantBark) {
-    $line = dynBarterBarkLine($merchant, $personality, $action, $item, $isBuying, $counterPrice);
+    $line = dynBarterBarkLine($merchant, $personality, $action, $item, $isBuying, $counterPrice, $relationship);
     if ($line !== "") {
         dynBarterQueueBark($merchant, $line);
     }

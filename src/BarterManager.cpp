@@ -455,7 +455,10 @@ void BarterManager::EmitChimEvent(ChimBridge::Action action, int offeredPrice, b
     e.merchantName = (mname && *mname) ? mname : "the merchant";
     e.merchantFormID = currentMerchantID;
     e.personality = MerchantPersonality::TraitToString(cachedPersonality.trait);
-    e.relationship = RelationshipManager::GetSingleton()->GetRelationship(currentMerchantID);
+    // Effective standing (folds in milestone/category bonuses) so the value CHIM voices
+    // matches what the player sees on the relationship meter and what pricing uses.
+    e.relationship = RelationshipManager::GetSingleton()->GetEffectiveRelationship(
+        currentMerchantID, cachedCategory);
     e.action = action;
     if (isCartMode) {
         e.itemName = "the goods";

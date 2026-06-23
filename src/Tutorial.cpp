@@ -95,13 +95,11 @@ void Tutorial::OnOfferWindowOpened(std::function<void()> onProceed) {
 
     const bool shown = ShowInfo(
         "Making an Offer\n\n"
-        "Use the slider to set your price, then submit. The merchant may accept, refuse, "
-        "or make a counter-offer. The acceptance chance updates as you slide.\n\n"
-        "Your RELATIONSHIP with a merchant (bounded by their personality) sets how good a "
-        "deal you can reach: liked merchants give better prices, disliked ones hold firm. "
-        "Merchants also haggle more readily on goods they SPECIALIZE in.\n\n"
-        "With the Intimidation perk you can strong-arm a better price, but it can sour "
-        "the relationship.",
+        "Slide to set your price and submit. The merchant may accept, refuse, or counter.\n\n"
+        "Your RELATIONSHIP sets how far the price can move: the more they like you, the bigger "
+        "the discount (or markup when selling). Each merchant's personality caps that range, "
+        "and they haggle more on goods they SPECIALIZE in (e.g. a smith bends more on weapons).\n\n"
+        "With the Intimidation perk you can force a better price, but it can sour the relationship.",
         onProceed);  // pass a copy so the fallback below still has it on failure
 
     // If the popup couldn't be queued for any reason, don't strand the offer window.

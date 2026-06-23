@@ -435,6 +435,26 @@ void ConfigMenu::RenderCartTab() {
 
     if (ImGui_Separator) ImGui_Separator();
 
+    if (ImGui_Checkbox) {
+        if (ImGui_Checkbox("Hold to Confirm / Intimidate", &s->holdToConfirm)) {
+            s->Save();
+        }
+        Tip("Make the offer window's Submit (gold) and Intimidate (red) buttons fill up "
+            "as you HOLD them, committing only when full. Cancel is always instant.");
+        Desc("  On = press and HOLD Submit or Intimidate; the button fills with color and\n"
+             "  the action fires when it tops off (prevents fat-finger offers/threats).\n"
+             "  Off = a single press/click commits instantly, as before.");
+    }
+    if (s->holdToConfirm && ImGui_SliderFloat) {
+        ImGui_SliderFloat("Hold to Confirm Time (sec)", &s->holdToConfirmSec, 0.2f, 2.0f, "%.2f", 0);
+        Tip("How long you must hold Submit/Intimidate for the bar to fill and commit.");
+        Desc("  Lower = a quick press-and-hold commits almost immediately (snappy, but\n"
+             "  easier to trigger by accident). Higher = a longer, more deliberate hold\n"
+             "  is required. ~0.65s is a brisk, intentional press.");
+    }
+
+    if (ImGui_Separator) ImGui_Separator();
+
     if (ImGui_SliderFloat) {
         // Tap window: release sooner = tap; hold past it engages the hold.
         ImGui_SliderFloat("Hold Tap Window (sec)", &s->cartHoldThreshold, 0.1f, 1.0f, "%.2f", 0);

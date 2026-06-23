@@ -77,6 +77,10 @@ public:
                     if (scan == 0x1000) {
                         gamepadActivateHeld = btn->IsPressed();
                     }
+                    // Track X button held state (intimidate hold-to-fill in the offer window).
+                    if (scan == 0x4000) {
+                        gamepadXHeld = btn->IsPressed();
+                    }
                 }
                 // Track thumbstick axis for continuous slider movement
                 if (auto* thumbEvt = evt->AsThumbstickEvent()) {
@@ -110,6 +114,10 @@ public:
                         // Track held state for E (activate-to-cart / hold-to-open).
                         if (scan == 18) {
                             keyboardActivateHeld = btn->IsPressed();
+                        }
+                        // Track R held state (intimidate hold-to-fill in the offer window).
+                        if (scan == 19) {
+                            keyboardRHeld = btn->IsPressed();
                         }
                     }
                 } else if (device == RE::INPUT_DEVICE::kMouse) {
@@ -160,6 +168,16 @@ public:
     bool IsYHeld() const { return gamepadYHeld; }
     bool IsBHeld() const { return keyboardBHeld; }
 
+    // Confirm/Intimidate held state for the offer window's hold-to-fill buttons.
+    // Confirm = A (gamepad) / E (keyboard); Intimidate = X (gamepad) / R (keyboard).
+    // Mouse is handled in the menu via button hover + left-button-held.
+    bool IsConfirmHeld() const {
+        return usingGamepad ? gamepadActivateHeld.load() : keyboardActivateHeld.load();
+    }
+    bool IsIntimidateHeld() const {
+        return usingGamepad ? gamepadXHeld.load() : keyboardRHeld.load();
+    }
+
 private:
     InputDeviceSink() = default;
     std::atomic<bool> usingGamepad{ false };
@@ -169,9 +187,11 @@ private:
     std::atomic<bool> gamepadAccept{ false };
     std::atomic<bool> gamepadCancel{ false };
     std::atomic<bool> gamepadX{ false };
+    std::atomic<bool> gamepadXHeld{ false };
     std::atomic<bool> gamepadY{ false };
     std::atomic<bool> gamepadYHeld{ false };
     std::atomic<bool> keyboardR{ false };
+    std::atomic<bool> keyboardRHeld{ false };
     std::atomic<bool> keyboardB{ false };
     std::atomic<bool> keyboardBHeld{ false };
     // Activate trigger state (A / E / left-mouse).
@@ -241,6 +261,18 @@ private:
     float relMarkerTargetX{ 60.0f };
     float relMarkerCurX{ -1.0f };  // -1 = uninitialized (snaps to a centered intro start)
     int currentRelationship{ 0 };  // latest effective standing, kept in sync for live meter updates
+
+    // --- Hold-to-fill confirm/intimidate ---------------------------------------
+    // Elapsed hold time (seconds) accumulated while the button is held; -1 = idle.
+    float submitHoldElapsed{ 0.0f };
+    float intimidateHoldElapsed{ 0.0f };
+    // "Armed" once the trigger has been seen released since opening / last commit, so a
+    // key still held from opening the window can't instantly charge a confirm.
+    bool submitHoldArmed{ false };
+    bool intimidateHoldArmed{ false };
+    // Drives the per-frame button fill + commit; resets both bars when idle.
+    void UpdateHoldToConfirm(float interval, bool mouseHeld);
+    void SetButtonFill(const char* buttonName, float progress);
 };
 
 class ScaleformUIImpl : public IBarterUI {

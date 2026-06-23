@@ -327,6 +327,101 @@ void BarterOfferMenu::PositionCoin() {
     }
 }
 
+void BarterOfferMenu::SetButtonFill(const char* buttonName, float progress) {
+    if (!uiMovie) return;
+    // Ease-in-out (smoothstep) so the bar accelerates into the fill then eases as it
+    // tops out - a smooth "charging" feel rather than a linear crawl.
+    const float t = std::clamp(progress, 0.0f, 1.0f);
+    const float eased = t * t * (3.0f - 2.0f * t);
+    RE::GFxValue xs; xs.SetNumber(static_cast<double>(eased * 100.0f));
+    uiMovie->SetVariable(std::format("_root.{}.bgFill._xscale", buttonName).c_str(), xs);
+    // The clip is placed with a ColorTransform alpha-multiply of 0 (that's how the SWF
+    // generator hides clips), so toggling _visible alone leaves it transparent. Drive
+    // _alpha to reveal it; the shape itself carries its own ~47% tint for the soft look.
+    RE::GFxValue alpha; alpha.SetNumber(t > 0.0f ? 100.0 : 0.0);
+    uiMovie->SetVariable(std::format("_root.{}.bgFill._alpha", buttonName).c_str(), alpha);
+    RE::GFxValue vis; vis.SetBoolean(t > 0.0f);
+    uiMovie->SetVariable(std::format("_root.{}.bgFill._visible", buttonName).c_str(), vis);
+}
+
+void BarterOfferMenu::UpdateHoldToConfirm(float interval, bool mouseHeld) {
+    auto* settings = Settings::GetSingleton();
+
+    // Disabled, or not in the offer state (counter/result use instant buttons), or still
+    // in the open cooldown -> clear both bars and require a fresh press before charging.
+    if (!uiMovie || !settings->holdToConfirm || showingCounter || showingResult || inputCooldown > 0.0f) {
+        if (submitHoldElapsed != 0.0f || intimidateHoldElapsed != 0.0f) {
+            submitHoldElapsed = 0.0f;
+            intimidateHoldElapsed = 0.0f;
+            SetButtonFill("btn_submit", 0.0f);
+            SetButtonFill("btn_intimidate", 0.0f);
+        }
+        submitHoldArmed = false;
+        intimidateHoldArmed = false;
+        return;
+    }
+
+    auto* sink = InputDeviceSink::GetSingleton();
+    const float dur = std::max(0.05f, settings->holdToConfirmSec);
+
+    // Intimidate is only offered when the perk is present (button visible).
+    bool intimidateAvailable = false;
+    {
+        RE::GFxValue vis;
+        if (uiMovie->GetVariable(&vis, "_root.btn_intimidate._visible") && vis.IsBool())
+            intimidateAvailable = vis.GetBool();
+    }
+
+    // hoveredButton indices match the buttons[] table: 0 = submit, 1 = intimidate.
+    const bool mouseOnSubmit     = mouseHeld && hoveredButton == 0;
+    const bool mouseOnIntimidate = mouseHeld && hoveredButton == 1;
+    bool submitDown     = mouseOnSubmit || (!mouseHeld && sink->IsConfirmHeld());
+    bool intimidateDown = intimidateAvailable &&
+                          (mouseOnIntimidate || (!mouseHeld && sink->IsIntimidateHeld()));
+    if (submitDown) intimidateDown = false;  // never charge both at once
+
+    // --- Submit (gold) bar ---
+    if (!submitDown) {
+        submitHoldArmed = true;  // released -> re-arm for the next deliberate hold
+        if (submitHoldElapsed != 0.0f) { submitHoldElapsed = 0.0f; SetButtonFill("btn_submit", 0.0f); }
+    } else if (submitHoldArmed) {
+        submitHoldElapsed += interval;
+        SetButtonFill("btn_submit", submitHoldElapsed / dur);
+        if (submitHoldElapsed >= dur) {
+            submitHoldArmed = false;
+            submitHoldElapsed = 0.0f;
+            SetButtonFill("btn_submit", 0.0f);
+            inputCooldown = 0.4f;
+            RE::GFxValue sliderVal;
+            uiMovie->GetVariable(&sliderVal, "_root.sliderValue");
+            const int offeredPrice = sliderVal.IsNumber() ? static_cast<int>(std::round(sliderVal.GetNumber())) : 0;
+            SKSE::GetTaskInterface()->AddTask([offeredPrice]() {
+                BarterManager::GetSingleton()->OnPlayerOffer(offeredPrice);
+            });
+            return;
+        }
+    }
+
+    // --- Intimidate (red) bar ---
+    if (!intimidateDown) {
+        intimidateHoldArmed = true;
+        if (intimidateHoldElapsed != 0.0f) { intimidateHoldElapsed = 0.0f; SetButtonFill("btn_intimidate", 0.0f); }
+    } else if (intimidateHoldArmed) {
+        intimidateHoldElapsed += interval;
+        SetButtonFill("btn_intimidate", intimidateHoldElapsed / dur);
+        if (intimidateHoldElapsed >= dur) {
+            intimidateHoldArmed = false;
+            intimidateHoldElapsed = 0.0f;
+            SetButtonFill("btn_intimidate", 0.0f);
+            inputCooldown = 0.4f;
+            SKSE::GetTaskInterface()->AddTask([]() {
+                BarterManager::GetSingleton()->OnIntimidateAttempt();
+            });
+            return;
+        }
+    }
+}
+
 void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime) {
     // Tracks the slider value between frames to detect movement (any input method) and
     // play a feedback click. NaN = uninitialised / freshly opened (skip first compare).
@@ -484,23 +579,31 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
             hoveredButton = newHovered;
         }
 
-        // Handle click on mouse-down within a button (don't require drag release)
+        // Handle click on mouse-down within a button (don't require drag release).
+        // When hold-to-confirm is on, Submit/Intimidate are driven by UpdateHoldToConfirm
+        // (fill-and-commit) instead of an instant click; Cancel and the counter/result
+        // buttons always commit instantly.
+        const bool holdMode = Settings::GetSingleton()->holdToConfirm;
         if (mouseJustPressed && hoveredButton >= 0) {
             const char* btnName = buttons[hoveredButton].name;
             DbgLog("BarterOfferMenu: Button clicked: {}", btnName);
             if (std::string_view(btnName) == "btn_submit") {
-                RE::GFxValue sliderVal;
-                uiMovie->GetVariable(&sliderVal, "_root.sliderValue");
-                if (sliderVal.GetType() == RE::GFxValue::ValueType::kNumber) {
-                    int offeredPrice = static_cast<int>(std::round(sliderVal.GetNumber()));
-                    SKSE::GetTaskInterface()->AddTask([offeredPrice]() {
-                        BarterManager::GetSingleton()->OnPlayerOffer(offeredPrice);
-                    });
+                if (!holdMode) {
+                    RE::GFxValue sliderVal;
+                    uiMovie->GetVariable(&sliderVal, "_root.sliderValue");
+                    if (sliderVal.GetType() == RE::GFxValue::ValueType::kNumber) {
+                        int offeredPrice = static_cast<int>(std::round(sliderVal.GetNumber()));
+                        SKSE::GetTaskInterface()->AddTask([offeredPrice]() {
+                            BarterManager::GetSingleton()->OnPlayerOffer(offeredPrice);
+                        });
+                    }
                 }
             } else if (std::string_view(btnName) == "btn_intimidate") {
-                SKSE::GetTaskInterface()->AddTask([]() {
-                    BarterManager::GetSingleton()->OnIntimidateAttempt();
-                });
+                if (!holdMode) {
+                    SKSE::GetTaskInterface()->AddTask([]() {
+                        BarterManager::GetSingleton()->OnIntimidateAttempt();
+                    });
+                }
             } else if (std::string_view(btnName) == "btn_cancel") {
                 SKSE::GetTaskInterface()->AddTask([]() {
                     BarterManager::GetSingleton()->OnCancelled();
@@ -533,6 +636,11 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
                 }
             }
         }
+
+        // Hold-to-fill confirm/intimidate: charge the gold/red bar while the trigger is
+        // held (mouse on the button, A/E for submit, X/R for intimidate) and commit when
+        // full. Runs every frame so it can also decay/hide the bar on release.
+        UpdateHoldToConfirm(a_interval, mouseHeld);
 
         // --- Update input hints based on actual input device (via InputDeviceSink) ---
         auto* inputSink = InputDeviceSink::GetSingleton();
@@ -573,7 +681,9 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
                 SKSE::GetTaskInterface()->AddTask([]() {
                     BarterManager::GetSingleton()->OnCounterResponse(0);
                 });
-            } else if (uiMovie) {
+            } else if (uiMovie && !Settings::GetSingleton()->holdToConfirm) {
+                // Instant submit only when hold-to-confirm is off; otherwise the held A/E
+                // input charges the fill via UpdateHoldToConfirm below.
                 RE::GFxValue sliderVal;
                 uiMovie->GetVariable(&sliderVal, "_root.sliderValue");
                 if (sliderVal.GetType() == RE::GFxValue::ValueType::kNumber) {
@@ -610,7 +720,7 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
                 SKSE::GetTaskInterface()->AddTask([]() {
                     BarterManager::GetSingleton()->OnCounterResponse(1);
                 });
-            } else if (!showingResult) {
+            } else if (!showingResult && !Settings::GetSingleton()->holdToConfirm) {
                 inputCooldown = 0.3f;
                 SKSE::GetTaskInterface()->AddTask([]() {
                     BarterManager::GetSingleton()->OnIntimidateAttempt();
@@ -625,7 +735,7 @@ void BarterOfferMenu::AdvanceMovie(float a_interval, std::uint32_t a_currentTime
                 SKSE::GetTaskInterface()->AddTask([]() {
                     BarterManager::GetSingleton()->OnCounterResponse(1);
                 });
-            } else if (!showingResult) {
+            } else if (!showingResult && !Settings::GetSingleton()->holdToConfirm) {
                 inputCooldown = 0.3f;
                 SKSE::GetTaskInterface()->AddTask([]() {
                     BarterManager::GetSingleton()->OnIntimidateAttempt();
@@ -880,6 +990,12 @@ RE::UI_MESSAGE_RESULTS BarterOfferMenu::ProcessMessage(RE::UIMessage& a_message)
                         });
                         return RE::UI_MESSAGE_RESULTS::kHandled;
                     }
+                    // Hold-to-confirm: the held A/E charges the fill bar in AdvanceMovie
+                    // instead of committing on the down-press. Consume the event so the
+                    // press doesn't leak, but don't submit here.
+                    if (Settings::GetSingleton()->holdToConfirm) {
+                        return RE::UI_MESSAGE_RESULTS::kHandled;
+                    }
                     DbgLog("BarterOfferMenu: Accept pressed - submitting offer");
                     if (uiMovie) {
                         RE::GFxValue sliderVal;
@@ -971,7 +1087,9 @@ RE::UI_MESSAGE_RESULTS BarterOfferMenu::ProcessMessage(RE::UIMessage& a_message)
                             SKSE::GetTaskInterface()->AddTask([]() {
                                 BarterManager::GetSingleton()->OnCounterResponse(1);
                             });
-                        } else {
+                        } else if (!Settings::GetSingleton()->holdToConfirm) {
+                            // Hold-to-confirm: held X/R charges the red fill bar in
+                            // AdvanceMovie; consume here without intimidating immediately.
                             inputCooldown = 0.3f;
                             SKSE::GetTaskInterface()->AddTask([]() {
                                 BarterManager::GetSingleton()->OnIntimidateAttempt();
@@ -1023,6 +1141,14 @@ void BarterOfferMenu::SetOfferData(const OfferData& data) {
     gamepadGraceDone = false;
     hoveredButton = -1;
     inputCooldown = 0.3f;  // Prevent the activation key from immediately submitting
+
+    // Fresh offer: clear any hold-to-fill charge and hide both fill bars.
+    submitHoldElapsed = 0.0f;
+    intimidateHoldElapsed = 0.0f;
+    submitHoldArmed = false;
+    intimidateHoldArmed = false;
+    SetButtonFill("btn_submit", 0.0f);
+    SetButtonFill("btn_intimidate", 0.0f);
 
     DbgLog("BarterOfferMenu::SetOfferData - item='{}', basePrice={}, effectivePrice={}, "
         "merchant='{}', personality='{}', relationship={}, slider=[{}%..{}%]",
@@ -1484,6 +1610,16 @@ void BarterOfferMenu::RestoreOfferUI() {
     sliderDragging = false;
     hoveredButton = -1;
 
+    // Reset hold-to-fill so a key still held from the previous screen can't instantly
+    // re-charge; the player must press again. Also hide both fill bars.
+    submitHoldElapsed = 0.0f;
+    intimidateHoldElapsed = 0.0f;
+    submitHoldArmed = false;
+    intimidateHoldArmed = false;
+    SetButtonFill("btn_submit", 0.0f);
+    SetButtonFill("btn_intimidate", 0.0f);
+    inputCooldown = 0.3f;  // brief guard so the returning key-press doesn't auto-charge
+
     // Tell the BarterManager we're retrying
     BarterManager::GetSingleton()->RetryOffer();
 
@@ -1576,6 +1712,9 @@ void BarterOfferMenu::FxDelegateCallback::Accept(CallbackProcessor* a_cbReg) {
 
 void BarterOfferMenu::OnOfferSubmit(const RE::FxDelegateArgs& a_params) {
     if (a_params.GetArgCount() < 1) return;
+    // Backstop: if hold-to-confirm is on, an AS-driven submit is ignored (the hold-fill
+    // in AdvanceMovie is the only commit path).
+    if (Settings::GetSingleton()->holdToConfirm) return;
     int offeredPrice = static_cast<int>(a_params[0].GetNumber());
     DbgLog("BarterOfferMenu: OfferSubmit received - price={}", offeredPrice);
     SKSE::GetTaskInterface()->AddTask([offeredPrice]() {
@@ -1593,6 +1732,8 @@ void BarterOfferMenu::OnCounterResponse(const RE::FxDelegateArgs& a_params) {
 }
 
 void BarterOfferMenu::OnIntimidateAttempt(const RE::FxDelegateArgs&) {
+    // Backstop: hold-to-confirm routes intimidate through the red fill bar instead.
+    if (Settings::GetSingleton()->holdToConfirm) return;
     DbgLog("BarterOfferMenu: IntimidateAttempt received");
     SKSE::GetTaskInterface()->AddTask([]() {
         BarterManager::GetSingleton()->OnIntimidateAttempt();

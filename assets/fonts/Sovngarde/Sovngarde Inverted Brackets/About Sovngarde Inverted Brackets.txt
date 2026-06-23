@@ -1,0 +1,2 @@
+This is the alternative style of Sovngarde and inverts the closing brackets.
+Choose between the regular or inverted brackets edition as they replace each other when installed on a desktop.

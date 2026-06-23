@@ -29,6 +29,8 @@ void Settings::Load() {
     valueThreshold = static_cast<int>(ini.GetLongValue("General", "iValueThreshold", valueThreshold));
     blockQuickBuy = ini.GetBoolValue("General", "bBlockQuickBuy", blockQuickBuy);
     cartVisibleByDefault = ini.GetBoolValue("General", "bCartVisibleByDefault", cartVisibleByDefault);
+    holdToConfirm = ini.GetBoolValue("General", "bHoldToConfirm", holdToConfirm);
+    holdToConfirmSec = static_cast<float>(ini.GetDoubleValue("General", "fHoldToConfirmSec", holdToConfirmSec));
     tutorialEnabled = ini.GetBoolValue("General", "bTutorialEnabled", tutorialEnabled);
     tutorialCartSeen = ini.GetBoolValue("General", "bTutorialCartSeen", tutorialCartSeen);
     tutorialOfferSeen = ini.GetBoolValue("General", "bTutorialOfferSeen", tutorialOfferSeen);
@@ -117,6 +119,8 @@ void Settings::Save() {
     ini.SetLongValue("General", "iValueThreshold", valueThreshold);
     ini.SetBoolValue("General", "bBlockQuickBuy", blockQuickBuy);
     ini.SetBoolValue("General", "bCartVisibleByDefault", cartVisibleByDefault);
+    ini.SetBoolValue("General", "bHoldToConfirm", holdToConfirm);
+    ini.SetDoubleValue("General", "fHoldToConfirmSec", holdToConfirmSec);
     ini.SetBoolValue("General", "bTutorialEnabled", tutorialEnabled);
     ini.SetBoolValue("General", "bTutorialCartSeen", tutorialCartSeen);
     ini.SetBoolValue("General", "bTutorialOfferSeen", tutorialOfferSeen);

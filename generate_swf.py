@@ -2028,6 +2028,25 @@ def build_swf():
             align=2,
         )
 
+    # --- Hold-to-fill overlay clips (Submit = gold, Intimidate = red) -------------
+    # Semi-transparent rectangles the SKSE plugin scales horizontally (_xscale 0..100)
+    # while the player holds the button, committing the action when full. Anchored at the
+    # left edge (bounds start at x=0) so the fill grows left -> right.
+    CHAR_BTN_FILL_SHAPE_SUBMIT  = 260
+    CHAR_BTN_FILL_SHAPE_INTIM   = 261
+    CHAR_BTN_FILL_SPRITE_SUBMIT = 262
+    CHAR_BTN_FILL_SPRITE_INTIM  = 263
+    tags += make_define_shape(CHAR_BTN_FILL_SHAPE_SUBMIT, (218, 165, 32, 120), (0, btn_w, 0, btn_h))
+    tags += make_define_shape(CHAR_BTN_FILL_SHAPE_INTIM,  (204, 68, 68, 120),  (0, btn_w, 0, btn_h))
+    for _fill_shape, _fill_sprite in [(CHAR_BTN_FILL_SHAPE_SUBMIT, CHAR_BTN_FILL_SPRITE_SUBMIT),
+                                      (CHAR_BTN_FILL_SHAPE_INTIM,  CHAR_BTN_FILL_SPRITE_INTIM)]:
+        _fwrap = bytearray()
+        _fwrap += make_place_object2(_fill_shape, 1, 0, 0)
+        _fwrap += make_show_frame()
+        _fwrap += make_end_tag()
+        tags += make_define_sprite(_fill_sprite, bytes(_fwrap))
+    fill_sprite_for_idx = {0: CHAR_BTN_FILL_SPRITE_SUBMIT, 1: CHAR_BTN_FILL_SPRITE_INTIM}
+
     # --- Button MovieClip sprites (per-button bg normal + highlight + icon + text) ---
     btn_sprite_defs = [
         (CHAR_BTN_SUBMIT, CHAR_BTN_TEXT_SUBMIT, CHAR_BTN_ICON_SHAPE_SUBMIT, 0),
@@ -2044,10 +2063,20 @@ def build_swf():
         inner = bytearray()
         inner += make_place_object2(spr_id_n, 1, 0, 0, "bgNormal")
         inner += make_place_object2_hidden(spr_id_h, 2, 0, 0, "bgHighlight")
-        # Icon at left side, vertically centered (22x22 icon in 28px tall button → y=3)
-        inner += make_place_object2(icon_shape_id, 4, 5, 3, "icon")
-        # Text label closer to icon, vertically centered (btn_h=28, font 10pt → y=5)
-        inner += make_place_object2(text_id, 3, 28, 5, "labelField")
+        fill_sprite = fill_sprite_for_idx.get(btn_idx)
+        if fill_sprite is not None:
+            # Hold-to-fill bar sits ABOVE the backgrounds but BELOW the icon/text, starts
+            # hidden, and the plugin animates its _xscale. Bump icon/label up a depth.
+            inner += make_place_object2_hidden(fill_sprite, 3, 0, 0, "bgFill")
+            # Icon at left side, vertically centered (22x22 icon in 28px tall button → y=3)
+            inner += make_place_object2(icon_shape_id, 5, 5, 3, "icon")
+            # Text label closer to icon, vertically centered (btn_h=28, font 10pt → y=5)
+            inner += make_place_object2(text_id, 4, 28, 5, "labelField")
+        else:
+            # Icon at left side, vertically centered (22x22 icon in 28px tall button → y=3)
+            inner += make_place_object2(icon_shape_id, 4, 5, 3, "icon")
+            # Text label closer to icon, vertically centered (btn_h=28, font 10pt → y=5)
+            inner += make_place_object2(text_id, 3, 28, 5, "labelField")
         inner += make_show_frame()
         inner += make_end_tag()
         tags += make_define_sprite(sprite_id, bytes(inner))

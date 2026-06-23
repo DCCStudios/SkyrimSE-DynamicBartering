@@ -25,6 +25,11 @@ public:
     // Cart panel is shown the moment the barter menu opens (with an empty-state hint),
     // not just after the first item is added.
     bool cartVisibleByDefault = true;
+    // Hold-to-confirm on the offer window's Submit (gold fill) and Intimidate (red fill)
+    // buttons: the button fills horizontally as you hold it and only commits when full.
+    // Cancel is unaffected (always instant). Off = single press/click commits instantly.
+    bool holdToConfirm = true;
+    float holdToConfirmSec = 0.65f;  // hold time to fully charge a confirm/intimidate
     // Two-step in-game tutorial. tutorialEnabled is armed on first install; the two
     // *Seen flags track which popups have been shown. When both are seen the tutorial
     // auto-disables; re-enabling it in the menu clears both seen flags so it replays.

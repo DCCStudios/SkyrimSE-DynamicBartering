@@ -524,12 +524,19 @@ void BarterCartMenu::UpdateCartPanel(RE::GFxMovieView* m) {
         }
     }
 
-    const int net = cart->GetNetAmount();
-
     // Relationship standing -> base-price effect (shown as a buy discount/markup %).
     auto* mgr = BarterManager::GetSingleton();
     const bool hasMerchant = mgr->GetCurrentMerchant() != nullptr;
     const float buyMult = mgr->GetCurrentPriceMult(true);
+    const float sellMult = mgr->GetCurrentPriceMult(false);
+
+    // Net the player pays/receives using the SAME standing-adjusted prices the offer
+    // window and the vanilla item cards use (raw subtotal x per-direction multiplier,
+    // rounded at the subtotal level exactly like BarterManager::ShowCartOffer), so all
+    // three displays agree. The cart still stores raw values; this is display-only.
+    const int adjBuy  = static_cast<int>(std::lround(cart->GetBuySubtotal()  * buyMult));
+    const int adjSell = static_cast<int>(std::lround(cart->GetSellSubtotal() * sellMult));
+    const int net = adjBuy - adjSell;
     const int relMilli = static_cast<int>(std::lround((buyMult - 1.0f) * 1000.0f));
 
     if (cartCount == lastCartCount && net == lastNet && relMilli == lastRelMilli) return;
@@ -602,7 +609,10 @@ void BarterCartMenu::UpdateCartPanel(RE::GFxMovieView* m) {
 
     std::string inner;
     for (const auto& e : cart->GetEntries()) {
-        const int line = e.count * e.marketUnitPrice;
+        // Standing-adjusted per-line price (matches the vanilla item cards, which round
+        // per item). Buys use the buy multiplier, sells the sell multiplier.
+        const float lineMult = e.isBuying ? buyMult : sellMult;
+        const int line = static_cast<int>(std::lround(e.count * e.marketUnitPrice * lineMult));
         std::string name = EscapeHtml(e.name);
         if (e.count > 1) name += "  x" + std::to_string(e.count);
         const char* col = e.isBuying ? "#E0B070" : "#9ACD6A";
