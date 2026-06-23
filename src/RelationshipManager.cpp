@@ -25,6 +25,16 @@ nlohmann::json RelationshipManager::BuildJsonRootLocked() const {
         root["categoryReputation"][std::to_string(cat)] = value;
     }
 
+    root["holdReputation"] = nlohmann::json::object();
+    for (const auto& [hold, value] : holdReputation) {
+        root["holdReputation"][std::to_string(hold)] = value;
+    }
+
+    root["civilWarStanding"] = nlohmann::json::object();
+    for (const auto& [hold, value] : civilWarStanding) {
+        root["civilWarStanding"][std::to_string(hold)] = value;
+    }
+
     root["appliedMilestones"] = nlohmann::json::array();
     for (auto id : appliedMilestones) {
         root["appliedMilestones"].push_back(id);
@@ -36,6 +46,8 @@ void RelationshipManager::ApplyJsonRootLocked(const nlohmann::json& root) {
     merchantData.clear();
     personalityOverrides.clear();
     categoryReputation.clear();
+    holdReputation.clear();
+    civilWarStanding.clear();
     appliedMilestones.clear();
 
     if (root.contains("merchants")) {
@@ -57,6 +69,20 @@ void RelationshipManager::ApplyJsonRootLocked(const nlohmann::json& root) {
         for (auto& [key, val] : root["categoryReputation"].items()) {
             try {
                 categoryReputation[std::stoi(key)] = val.get<int>();
+            } catch (...) {}
+        }
+    }
+    if (root.contains("holdReputation") && root["holdReputation"].is_object()) {
+        for (auto& [key, val] : root["holdReputation"].items()) {
+            try {
+                holdReputation[std::stoi(key)] = val.get<int>();
+            } catch (...) {}
+        }
+    }
+    if (root.contains("civilWarStanding") && root["civilWarStanding"].is_object()) {
+        for (auto& [key, val] : root["civilWarStanding"].items()) {
+            try {
+                civilWarStanding[std::stoi(key)] = val.get<int>();
             } catch (...) {}
         }
     }
@@ -271,7 +297,38 @@ void RelationshipManager::AddCategoryReputation(MerchantCategory cat, int delta)
     v = std::clamp(v + delta, settings->relMin, settings->relMax);
 }
 
-int RelationshipManager::GetEffectiveRelationship(RE::FormID merchantRefID, MerchantCategory cat) const {
+int RelationshipManager::GetHoldReputation(Hold hold) const {
+    if (hold == Hold::None) return 0;
+    std::lock_guard lock(dataMutex);
+    auto it = holdReputation.find(static_cast<int>(hold));
+    return (it != holdReputation.end()) ? it->second : 0;
+}
+
+void RelationshipManager::AddHoldReputation(Hold hold, int delta) {
+    if (hold == Hold::None || delta == 0) return;
+    std::lock_guard lock(dataMutex);
+    auto* settings = Settings::GetSingleton();
+    int& v = holdReputation[static_cast<int>(hold)];
+    v = std::clamp(v + delta, settings->relMin, settings->relMax);
+}
+
+int RelationshipManager::GetCivilWarStanding(Hold hold) const {
+    if (hold == Hold::None) return 0;
+    std::lock_guard lock(dataMutex);
+    auto it = civilWarStanding.find(static_cast<int>(hold));
+    return (it != civilWarStanding.end()) ? it->second : 0;
+}
+
+void RelationshipManager::SetCivilWarStanding(Hold hold, int value) {
+    if (hold == Hold::None) return;
+    std::lock_guard lock(dataMutex);
+    auto* settings = Settings::GetSingleton();
+    civilWarStanding[static_cast<int>(hold)] =
+        std::clamp(value, settings->relMin, settings->relMax);
+}
+
+int RelationshipManager::GetEffectiveRelationship(RE::FormID merchantRefID, MerchantCategory cat,
+                                                  Hold hold) const {
     std::lock_guard lock(dataMutex);
     int base = 0;
     auto it = merchantData.find(merchantRefID);
@@ -281,8 +338,16 @@ int RelationshipManager::GetEffectiveRelationship(RE::FormID merchantRefID, Merc
     auto cit = categoryReputation.find(static_cast<int>(cat));
     if (cit != categoryReputation.end()) catOffset = cit->second;
 
+    int holdOffset = 0;
+    if (hold != Hold::None) {
+        auto hit = holdReputation.find(static_cast<int>(hold));
+        if (hit != holdReputation.end()) holdOffset += hit->second;
+        auto wit = civilWarStanding.find(static_cast<int>(hold));
+        if (wit != civilWarStanding.end()) holdOffset += wit->second;
+    }
+
     auto* settings = Settings::GetSingleton();
-    return std::clamp(base + catOffset, settings->relMin, settings->relMax);
+    return std::clamp(base + catOffset + holdOffset, settings->relMin, settings->relMax);
 }
 
 bool RelationshipManager::HasMilestone(std::uint32_t id) const {

@@ -3,6 +3,7 @@
 #include "Hooks.h"
 #include "BarterManager.h"
 #include "RelationshipManager.h"
+#include "MilestoneManager.h"
 #include "UI/UIBridge.h"
 #include "UI/ScaleformUI.h"
 #include "UI/BarterCartMenu.h"
@@ -59,6 +60,7 @@ namespace {
                 UIBridge::GetSingleton()->Initialize();
                 ConfigMenu::Register();
                 ChimBridge::Initialize();
+                MilestoneManager::Register();
                 logger::info("DynamicBarteringSKSE initialized");
                 break;
             case SKSE::MessagingInterface::kInputLoaded:

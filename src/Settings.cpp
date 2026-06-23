@@ -24,6 +24,11 @@ void Settings::Load() {
     showAcceptanceHint = ini.GetBoolValue("General", "bShowAcceptanceHint", showAcceptanceHint);
     showRelationshipPreview = ini.GetBoolValue("General", "bShowRelationshipPreview", showRelationshipPreview);
     gamepadIconStyle = static_cast<GamepadIconStyle>(ini.GetLongValue("General", "iGamepadIconStyle", static_cast<int>(gamepadIconStyle)));
+    {
+        int themeIdx = static_cast<int>(ini.GetLongValue("General", "iUITheme", static_cast<int>(uiTheme)));
+        if (themeIdx < 0 || themeIdx >= static_cast<int>(UITheme::kTotal)) themeIdx = 0;
+        uiTheme = static_cast<UITheme>(themeIdx);
+    }
     popupDelayMs = static_cast<int>(ini.GetLongValue("General", "iPopupDelayMs", popupDelayMs));
     skipBelowThreshold = ini.GetBoolValue("General", "bSkipBelowThreshold", skipBelowThreshold);
     valueThreshold = static_cast<int>(ini.GetLongValue("General", "iValueThreshold", valueThreshold));
@@ -76,6 +81,8 @@ void Settings::Load() {
     priceJackIntensity = static_cast<float>(ini.GetDoubleValue("Relationships", "fPriceJackIntensity", priceJackIntensity));
     priceBreakThreshold = static_cast<int>(ini.GetLongValue("Relationships", "iPriceBreakThreshold", priceBreakThreshold));
     milestoneReputation = ini.GetBoolValue("Relationships", "bMilestoneReputation", milestoneReputation);
+    civilWarReputation = ini.GetBoolValue("Relationships", "bCivilWarReputation", civilWarReputation);
+    civilWarRepBonus = static_cast<int>(ini.GetLongValue("Relationships", "iCivilWarRepBonus", civilWarRepBonus));
 
     // Personalities
     counterOfferBaseChance = static_cast<float>(ini.GetDoubleValue("Personalities", "fCounterOfferBaseChance", counterOfferBaseChance));
@@ -114,6 +121,7 @@ void Settings::Save() {
     ini.SetBoolValue("General", "bShowAcceptanceHint", showAcceptanceHint);
     ini.SetBoolValue("General", "bShowRelationshipPreview", showRelationshipPreview);
     ini.SetLongValue("General", "iGamepadIconStyle", static_cast<int>(gamepadIconStyle));
+    ini.SetLongValue("General", "iUITheme", static_cast<int>(uiTheme));
     ini.SetLongValue("General", "iPopupDelayMs", popupDelayMs);
     ini.SetBoolValue("General", "bSkipBelowThreshold", skipBelowThreshold);
     ini.SetLongValue("General", "iValueThreshold", valueThreshold);
@@ -166,6 +174,8 @@ void Settings::Save() {
     ini.SetDoubleValue("Relationships", "fPriceJackIntensity", priceJackIntensity);
     ini.SetLongValue("Relationships", "iPriceBreakThreshold", priceBreakThreshold);
     ini.SetBoolValue("Relationships", "bMilestoneReputation", milestoneReputation);
+    ini.SetBoolValue("Relationships", "bCivilWarReputation", civilWarReputation);
+    ini.SetLongValue("Relationships", "iCivilWarRepBonus", civilWarRepBonus);
 
     // Personalities
     ini.SetDoubleValue("Personalities", "fCounterOfferBaseChance", counterOfferBaseChance);

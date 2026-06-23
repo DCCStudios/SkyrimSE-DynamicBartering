@@ -2,6 +2,7 @@
 #include "DealMemory.h"
 #include "MerchantPersonality.h"
 #include "MerchantCategory.h"
+#include "Hold.h"
 #include <unordered_set>
 
 class RelationshipManager {
@@ -36,7 +37,21 @@ public:
     // merchant = their per-merchant standing + their category offset (clamped).
     int GetCategoryReputation(MerchantCategory cat) const;
     void AddCategoryReputation(MerchantCategory cat, int delta);
-    int GetEffectiveRelationship(RE::FormID merchantRefID, MerchantCategory cat) const;
+
+    // --- Per-hold reputation (Thane bonuses + civil-war standing) ----------------
+    // holdReputation is an accumulated one-shot bonus (e.g. becoming Thane lifts every
+    // merchant in that hold). civilWarStanding is a LIVE value recomputed from the
+    // current war state (hold owner vs the player's side), so it tracks holds flipping
+    // hands; it is set, not accumulated.
+    int GetHoldReputation(Hold hold) const;
+    void AddHoldReputation(Hold hold, int delta);
+    int GetCivilWarStanding(Hold hold) const;
+    void SetCivilWarStanding(Hold hold, int value);
+
+    // Effective relationship = per-merchant standing + category offset + hold bonus +
+    // civil-war standing, clamped. Pass Hold::None to skip the hold contribution.
+    int GetEffectiveRelationship(RE::FormID merchantRefID, MerchantCategory cat,
+                                 Hold hold = Hold::None) const;
 
     // One-shot milestone bookkeeping so each milestone applies its bonus only once.
     bool HasMilestone(std::uint32_t id) const;
@@ -50,6 +65,8 @@ private:
     std::unordered_map<RE::FormID, MerchantMemory> merchantData;
     std::unordered_map<RE::FormID, MerchantPersonality::Trait> personalityOverrides;
     std::unordered_map<int, int> categoryReputation;       // key = int(MerchantCategory)
+    std::unordered_map<int, int> holdReputation;           // key = int(Hold); accumulated bonus
+    std::unordered_map<int, int> civilWarStanding;         // key = int(Hold); live war-derived
     std::unordered_set<std::uint32_t> appliedMilestones;   // milestone ids already granted
     mutable std::mutex dataMutex;
 

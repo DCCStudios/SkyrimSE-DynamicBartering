@@ -220,46 +220,11 @@ void ConfigMenu::RenderGeneralTab() {
             "Auto-disables again once both have been shown.");
     }
 
-    if (ImGui_Separator) ImGui_Separator();
-    if (ImGui_Text) ImGui_Text("UI Backend");
-
-    if (ImGui_Combo) {
-        static int uiModeIdx = static_cast<int>(s->uiMode);
-        static const char* uiModeItems[] = { "Auto", "Scaleform (SWF)", "PrismaUI (HTML)" };
-        if (ImGui_Combo("UI Mode", &uiModeIdx, uiModeItems, 3, 3)) {
-            UIMode newMode = static_cast<UIMode>(uiModeIdx);
-            s->uiMode = newMode;
-            UIBridge::GetSingleton()->SwitchMode(newMode);
-        }
-        Tip("Which renderer draws the offer window.\n"
-            "Auto: pick the best available.\n"
-            "Scaleform (SWF): native Skyrim UI, widest compatibility.\n"
-            "PrismaUI (HTML): richer styling, requires the PrismaUI plugin.");
-    } else if (ImGui_Button) {
-        // Fallback: use buttons when combo isn't available
-        auto currentMode = s->uiMode;
-        if (ImGui_Text) {
-            const char* modeStr = currentMode == UIMode::Auto ? "Auto" :
-                                  currentMode == UIMode::ScaleformSWF ? "Scaleform (SWF)" : "PrismaUI (HTML)";
-            ImGui_Text("Current: %s", modeStr);
-        }
-        if (ImGui_Button("Use SWF", 0) && currentMode != UIMode::ScaleformSWF) {
-            s->uiMode = UIMode::ScaleformSWF;
-            UIBridge::GetSingleton()->SwitchMode(UIMode::ScaleformSWF);
-        }
-        if (ImGui_Button("Use PrismaUI", 0) && currentMode != UIMode::PrismaUI) {
-            s->uiMode = UIMode::PrismaUI;
-            UIBridge::GetSingleton()->SwitchMode(UIMode::PrismaUI);
-        }
-        if (ImGui_Button("Auto", 0) && currentMode != UIMode::Auto) {
-            s->uiMode = UIMode::Auto;
-            UIBridge::GetSingleton()->SwitchMode(UIMode::Auto);
-        }
-    } else if (ImGui_Text) {
-        ImGui_Text("UI Mode: %s (change in INI)",
-            s->uiMode == UIMode::ScaleformSWF ? "SWF" :
-            s->uiMode == UIMode::PrismaUI ? "PrismaUI" : "Auto");
-    }
+    // NOTE: The UI-backend selector (Auto / Scaleform / PrismaUI) is intentionally
+    // hidden for now. The PrismaUI (HTML) frontend is deprecated for the time being, so
+    // the Scaleform (SWF) renderer is the only supported path. The PrismaUI code still
+    // exists in the backend and can be re-exposed here later; until then, UIBridge forces
+    // the Scaleform renderer regardless of the stored iUIMode (see UIBridge::Initialize).
 
     if (ImGui_Separator) ImGui_Separator();
     if (ImGui_Text) ImGui_Text("Controller Glyphs");
@@ -286,6 +251,40 @@ void ConfigMenu::RenderGeneralTab() {
             s->gamepadIconStyle = GamepadIconStyle::PlayStation;
             s->Save();
         }
+    }
+
+    if (ImGui_Separator) ImGui_Separator();
+    if (ImGui_Text) ImGui_Text("UI Theme");
+
+    // One entry per UITheme, in enum order. ThemeDisplayName keeps the labels in sync
+    // with the palette table so this never drifts.
+    static const char* themeItems[] = {
+        ThemeDisplayName(UITheme::Default),
+        ThemeDisplayName(UITheme::Outlander),
+        ThemeDisplayName(UITheme::Oathvein),
+        ThemeDisplayName(UITheme::Edge),
+        ThemeDisplayName(UITheme::Nordic),
+        ThemeDisplayName(UITheme::Untarnished),
+        ThemeDisplayName(UITheme::NewHorizons),
+        ThemeDisplayName(UITheme::Dragonborn),
+        ThemeDisplayName(UITheme::SkyUI),
+    };
+    constexpr int themeCount = static_cast<int>(UITheme::kTotal);
+    if (ImGui_Combo) {
+        static int themeIdx = static_cast<int>(s->uiTheme);
+        if (ImGui_Combo("Theme", &themeIdx, themeItems, themeCount, themeCount)) {
+            if (themeIdx < 0 || themeIdx >= themeCount) themeIdx = 0;
+            s->uiTheme = static_cast<UITheme>(themeIdx);
+            s->Save();
+        }
+        Tip("Recolors the barter window (cart, offer sliders, buttons) to match a popular "
+            "UI overhaul. Applies the next time you open the offer window.");
+        Desc("  Only colors and accents change - the FONT follows whatever UI overhaul you\n"
+             "  have installed (Nordic UI, Outlander, etc.), so pairing this theme with its\n"
+             "  matching mod makes the window blend in seamlessly. 'Default' is the original\n"
+             "  gold-on-parchment look and works with vanilla/SkyUI fonts.");
+    } else if (ImGui_Text) {
+        ImGui_Text("UI Theme: %s (change in INI: iUITheme)", ThemeDisplayName(s->uiTheme));
     }
 
     if (ImGui_Separator) ImGui_Separator();
@@ -755,8 +754,21 @@ void ConfigMenu::RenderRelationshipsTab() {
         if (ImGui_Checkbox("Milestone Reputation", &s->milestoneReputation)) s->Save();
         Tip("Major story milestones lift your standing with a whole merchant category at "
             "once (Arch-Mage -> magic traders, Thieves Guild Master -> fences, Companions "
-            "Harbinger -> blacksmiths, Bards College -> innkeepers). Applied once each, "
-            "retroactively.");
+            "Harbinger -> blacksmiths, Bards College -> innkeepers). Becoming Thane of a "
+            "hold also lifts that hold's merchants. Applied once each, retroactively.");
+    }
+    if (ImGui_Checkbox) {
+        if (ImGui_Checkbox("Civil War Standing", &s->civilWarReputation)) s->Save();
+        Tip("Once you join a side in the civil war, merchants in holds your side controls "
+            "warm to you while merchants in enemy-held holds turn cold. Recomputed as holds "
+            "change hands. Requires Milestone Reputation.");
+        Desc("  A live, per-hold standing offset (not a one-shot): when a hold flips sides\n"
+             "  the effect follows it. Neutral (no side joined) = no effect.");
+    }
+    if (ImGui_SliderInt) {
+        if (ImGui_SliderInt("Civil War Standing Swing", &s->civilWarRepBonus, 0, 30, "%d", 0)) s->Save();
+        Tip("Standing points a hold's civil-war allegiance grants (your side) or subtracts "
+            "(enemy side) for that hold's merchants. 0 = disable the swing.");
     }
 
     if (ImGui_Separator) ImGui_Separator();
@@ -837,7 +849,8 @@ void ConfigMenu::RenderRelationshipsTab() {
                         : MerchantPersonality::FromTrait(MerchantPersonality::Trait::Fair);
                     MerchantCategory cat = actor
                         ? Merchants::DetectCategory(actor) : MerchantCategory::Generalist;
-                    int effRel = relMgr->GetEffectiveRelationship(id, cat);
+                    Hold hold = actor ? Holds::DetectHold(actor) : Hold::None;
+                    int effRel = relMgr->GetEffectiveRelationship(id, cat, hold);
                     // Bidirectional buy effect: <1 discount, >1 markup.
                     float buyMult = PriceJack::GetBuySellMultiplier(effRel, pers, true, false);
                     int discPct = static_cast<int>((1.0f - buyMult) * 100.0f + (buyMult <= 1.0f ? 0.5f : -0.5f));
@@ -855,9 +868,11 @@ void ConfigMenu::RenderRelationshipsTab() {
                             Merchants::MerchantCategoryToString(cat));
                     }
                     int catOff = relMgr->GetCategoryReputation(cat);
-                    if (catOff != 0) {
-                        ImGui_Text("    (includes %+d category reputation; effective standing %d)",
-                            catOff, effRel);
+                    int holdOff = relMgr->GetHoldReputation(hold);
+                    int cwOff = relMgr->GetCivilWarStanding(hold);
+                    if (catOff != 0 || holdOff != 0 || cwOff != 0) {
+                        ImGui_Text("    (includes %+d category, %+d Thane, %+d civil-war [%s]; effective %d)",
+                            catOff, holdOff, cwOff, Holds::HoldName(hold), effRel);
                     }
                 }
             }

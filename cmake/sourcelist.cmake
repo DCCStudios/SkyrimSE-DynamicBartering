@@ -1,6 +1,7 @@
 set(sources
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Settings.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Theme.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BarterSounds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Hooks.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BarterManager.cpp
@@ -9,6 +10,7 @@ set(sources
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RelationshipManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MerchantPersonality.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MerchantCategory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Hold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MilestoneManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Tutorial.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DealMemory.cpp

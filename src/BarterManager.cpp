@@ -64,6 +64,7 @@ void BarterManager::OnBarterOpen() {
         cachedPerks = PerkBonuses::Detect(player);
         cachedPersonality = RelationshipManager::GetSingleton()->GetPersonality(currentMerchant);
         cachedCategory = Merchants::DetectCategory(currentMerchant);
+        cachedHold = Holds::DetectHold(currentMerchant);
         cachedSpeech = player->AsActorValueOwner()
             ? player->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeech)
             : 15.0f;
@@ -137,7 +138,7 @@ void BarterManager::ShowSingleOffer(bool refresh) {
 
     // Effective relationship folds in any category-wide milestone bonus.
     int effRel = RelationshipManager::GetSingleton()->GetEffectiveRelationship(
-        currentMerchantID, cachedCategory);
+        currentMerchantID, cachedCategory, cachedHold);
 
     // Real relationship/personality base-price effect (bidirectional). The mod always
     // applies this to its own negotiation (the price we read off the list row is the
@@ -249,7 +250,7 @@ void BarterManager::ShowCartOffer(bool refresh) {
         currentMerchantID, currentMerchant->GetName() ? currentMerchant->GetName() : "Unknown");
 
     int effRel = RelationshipManager::GetSingleton()->GetEffectiveRelationship(
-        currentMerchantID, cachedCategory);
+        currentMerchantID, cachedCategory, cachedHold);
 
     // Stored cart prices are the raw vanilla values, so the relationship base-price
     // effect is applied here (buys discounted / sells boosted by standing). The vanilla
@@ -358,7 +359,7 @@ AcceptanceContext BarterManager::BuildAcceptanceContext(int offeredPrice) {
     ctx.speechSkill = cachedSpeech;
     ctx.perks = cachedPerks;
     ctx.relationship = RelationshipManager::GetSingleton()->GetEffectiveRelationship(
-        currentMerchantID, cachedCategory);
+        currentMerchantID, cachedCategory, cachedHold);
     ctx.personality = cachedPersonality;
     ctx.memory = &memory;
     ctx.offeredPrice = offeredPrice;
@@ -375,7 +376,7 @@ AcceptanceContext BarterManager::BuildAcceptanceContext(int offeredPrice) {
 float BarterManager::GetCurrentPriceMult(bool buying) const {
     if (currentMerchantID == 0) return 1.0f;
     int effRel = RelationshipManager::GetSingleton()->GetEffectiveRelationship(
-        currentMerchantID, cachedCategory);
+        currentMerchantID, cachedCategory, cachedHold);
     return PriceJack::GetBuySellMultiplier(effRel, cachedPersonality, buying, cachedPerks.hasInvestor);
 }
 
@@ -436,7 +437,7 @@ int BarterManager::RollRelationshipChange(float chancePercent, int delta, const 
         // Push the new standing to any open offer window so its meter updates live
         // (e.g. after a failed intimidation, the marker slides to the worse position).
         int newEffRel = RelationshipManager::GetSingleton()->GetEffectiveRelationship(
-            currentMerchantID, cachedCategory);
+            currentMerchantID, cachedCategory, cachedHold);
         UIBridge::GetSingleton()->UpdateRelationship(newEffRel);
         return delta;
     }
@@ -458,7 +459,7 @@ void BarterManager::EmitChimEvent(ChimBridge::Action action, int offeredPrice, b
     // Effective standing (folds in milestone/category bonuses) so the value CHIM voices
     // matches what the player sees on the relationship meter and what pricing uses.
     e.relationship = RelationshipManager::GetSingleton()->GetEffectiveRelationship(
-        currentMerchantID, cachedCategory);
+        currentMerchantID, cachedCategory, cachedHold);
     e.action = action;
     if (isCartMode) {
         e.itemName = "the goods";
@@ -683,7 +684,7 @@ void BarterManager::OnIntimidateAttempt() {
         int intimidatedPrice = currentIsBuying
             ? static_cast<int>(currentEffectivePrice * 0.5f)
             : static_cast<int>(currentEffectivePrice * 1.5f);
-        RollRelationshipChange(85.0f, -15, "intimidation succeeded");
+        int relLoss = RollRelationshipChange(85.0f, -15, "intimidation succeeded");
         EmitChimEvent(ChimBridge::Action::IntimidateSuccess, intimidatedPrice, true);
         RecordAndClose(intimidatedPrice, true, false, 0);
         if (isCartMode) {
@@ -691,15 +692,32 @@ void BarterManager::OnIntimidateAttempt() {
         } else {
             TransferItemAndGold(intimidatedPrice);
         }
-        auto itemID = currentItemID;
-        UIBridge::GetSingleton()->Hide();
-        state = BarterState::Idle;
-        Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
-        currentItem = nullptr;
-        currentItemID = 0;
-        RefreshBarterMenu(itemID);
-        BarterSounds::PlayDelayed(BarterSounds::Event::OfferAccepted, 320);
-        DbgLog("BarterManager: Intimidation succeeded - deal done, window closed");
+        // The goods/gold are already exchanged, so refresh the vanilla barter list NOW
+        // (covers both the auto-close and any early manual dismiss). Then, instead of
+        // closing instantly like before, show a dramatic "merchant caved" screen and let
+        // it linger briefly before tearing the window down (mirrors ProcessAcceptance).
+        RefreshBarterMenu(currentItemID);
+        UIBridge::GetSingleton()->ShowIntimidationSuccess(intimidatedPrice, relLoss, currentIsBuying);
+        BarterSounds::PlayDelayed(BarterSounds::Event::IntimidateSuccess, 320);
+        state = BarterState::ShowingResult;
+        DbgLog("BarterManager: Intimidation succeeded for {} gold - showing success screen", intimidatedPrice);
+
+        SKSE::GetTaskInterface()->AddTask([this]() {
+            std::thread([this]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+                SKSE::GetTaskInterface()->AddTask([this]() {
+                    if (state == BarterState::ShowingResult) {
+                        auto itemID = currentItemID;
+                        UIBridge::GetSingleton()->Hide();
+                        state = BarterState::Idle;
+                        Hooks::lastNegotiationEnd = std::chrono::steady_clock::now();
+                        currentItem = nullptr;
+                        currentItemID = 0;
+                        RefreshBarterMenu(itemID);
+                    }
+                });
+            }).detach();
+        });
     } else {
         int loss = RollRelationshipChange(95.0f, failPenalty, "intimidation failed");
         UIBridge::GetSingleton()->ShowResult(false, 0, loss);

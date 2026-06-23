@@ -220,6 +220,10 @@ public:
     void SetOfferData(const struct OfferData& data);
     void SetCounterOffer(int amount, int patience);
     void SetResult(bool accepted, int goldAmount, int relDelta);
+    // Theatrical "merchant yielded" screen for a successful intimidation (deal already
+    // done). Themed via the active palette; the intimidation red stays fixed in every
+    // theme, mirroring the Intimidate button.
+    void SetIntimidationSuccess(int coercedPrice, int relDelta, bool buying);
     void RestoreOfferUI();
     void UpdateRelationshipMeter(int relationship);
     // Live-update the stored standing + meter (called when the relationship changes
@@ -230,6 +234,9 @@ public:
     void ApplyHintCells(int state);
     // Reposition the standalone coin glyph so it hugs the (centered) price number.
     void PositionCoin();
+    // Recolor the baked gold art (panel corners, ornament, slider, submit button) to
+    // match the active UI theme via a multiply color-transform. Identity for Default.
+    void ApplyTheme();
 
     static inline std::optional<OfferData> pendingOfferData;
 
@@ -281,6 +288,7 @@ public:
     void ShowOffer(const OfferData& data) override;
     void ShowCounterOffer(int counterAmount, int patience) override;
     void ShowResult(bool accepted, int goldAmount, int relDelta) override;
+    void ShowIntimidationSuccess(int coercedPrice, int relDelta, bool buying) override;
     void UpdateRelationship(int effectiveRelationship) override;
     void Hide() override;
     bool IsAvailable() const override { return true; }

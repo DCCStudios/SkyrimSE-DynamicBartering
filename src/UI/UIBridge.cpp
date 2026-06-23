@@ -12,6 +12,16 @@ void UIBridge::Initialize() {
     auto* settings = Settings::GetSingleton();
     UIMode mode = settings->uiMode;
 
+    // PrismaUI frontend is deprecated for now (its selector is hidden in the SKSE menu).
+    // Redirect any stored PrismaUI preference to the Scaleform renderer so an old INI /
+    // save can't strand the player on the unsupported UI with no in-game way to switch.
+    // The PrismaUI backend is left intact and can be re-enabled later. We do NOT persist
+    // this change, so the original preference returns automatically if PrismaUI is restored.
+    if (mode == UIMode::PrismaUI) {
+        logger::info("UIBridge: PrismaUI mode is deprecated - using Scaleform renderer instead");
+        mode = UIMode::ScaleformSWF;
+    }
+
     logger::info("UIBridge: Initializing with mode={}", static_cast<int>(mode));
 
     // Always initialize both UIs so runtime switching works
@@ -66,6 +76,10 @@ void UIBridge::ShowCounterOffer(int counterAmount, int patience) {
 
 void UIBridge::ShowResult(bool accepted, int goldAmount, int relDelta) {
     if (activeUI) activeUI->ShowResult(accepted, goldAmount, relDelta);
+}
+
+void UIBridge::ShowIntimidationSuccess(int coercedPrice, int relDelta, bool buying) {
+    if (activeUI) activeUI->ShowIntimidationSuccess(coercedPrice, relDelta, buying);
 }
 
 void UIBridge::UpdateRelationship(int effectiveRelationship) {

@@ -2409,13 +2409,14 @@ def build_swf():
     panel_y = 160
 
     tags += make_place_object2(CHAR_PANEL_BG, 1, panel_x, panel_y, "panelBG")
-    tags += make_place_object2(CHAR_PANEL_BORDER, 2, panel_x, panel_y)
+    tags += make_place_object2(CHAR_PANEL_BORDER, 2, panel_x, panel_y, "panelBorder")
 
-    # Corner ornaments (flush with panel edges, 40x40)
-    tags += make_place_object2(CHAR_CORNER_TL, 40, panel_x - 4, panel_y - 4)
-    tags += make_place_object2(CHAR_CORNER_TR, 41, panel_x + panel_w - 36, panel_y - 4)
-    tags += make_place_object2(CHAR_CORNER_BL, 42, panel_x - 4, panel_y + panel_h - 36)
-    tags += make_place_object2(CHAR_CORNER_BR, 43, panel_x + panel_w - 36, panel_y + panel_h - 36)
+    # Corner ornaments (flush with panel edges, 40x40). Named so the SKSE plugin can
+    # recolor them per UI theme via a color-transform.
+    tags += make_place_object2(CHAR_CORNER_TL, 40, panel_x - 4, panel_y - 4, "cornerTL")
+    tags += make_place_object2(CHAR_CORNER_TR, 41, panel_x + panel_w - 36, panel_y - 4, "cornerTR")
+    tags += make_place_object2(CHAR_CORNER_BL, 42, panel_x - 4, panel_y + panel_h - 36, "cornerBL")
+    tags += make_place_object2(CHAR_CORNER_BR, 43, panel_x + panel_w - 36, panel_y + panel_h - 36, "cornerBR")
 
     # Text fields (left-aligned to panel_x + 20)
     tx = panel_x + 20

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Theme.h"  // UITheme
+
 enum class UIMode : int { Auto = 0, ScaleformSWF = 1, PrismaUI = 2 };
 enum class GamepadIconStyle : int { Xbox = 0, PlayStation = 1 };
 
@@ -19,6 +21,10 @@ public:
     bool showAcceptanceHint = true;
     bool showRelationshipPreview = true;
     GamepadIconStyle gamepadIconStyle = GamepadIconStyle::Xbox;  // controller glyph set for keybind hints
+    // Visual theme for the barter UI (colors + tints). Fonts follow the user's installed
+    // UI overhaul automatically (we use the $Everywhere* font aliases), so picking the
+    // theme that matches an installed overhaul makes the window blend in.
+    UITheme uiTheme = UITheme::Default;
     int popupDelayMs = 200;
     bool skipBelowThreshold = false;
     int valueThreshold = 50;
@@ -115,7 +121,13 @@ public:
     int priceBreakThreshold = 20;
     // Widespread reputation gains across a whole merchant category when the player
     // hits major milestones (e.g. Archmage -> magic traders, Guildmaster -> fences).
+    // Also covers per-hold Thane bonuses (becoming Thane lifts that hold's merchants).
     bool milestoneReputation = true;
+    // Civil-war standing: once you join a side, merchants in holds your side controls
+    // warm to you and merchants in enemy-held holds turn cold. Recomputed as holds
+    // change hands. Gated behind milestoneReputation as well.
+    bool civilWarReputation = true;
+    int civilWarRepBonus = 8;  // standing swing per hold (your side: +, enemy side: -)
 
     // Personalities
     float counterOfferBaseChance = 30.0f;

@@ -1,6 +1,7 @@
 set(headers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PCH.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Settings.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Theme.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BarterSounds.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Hooks.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BarterManager.h
@@ -9,6 +10,7 @@ set(headers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RelationshipManager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MerchantPersonality.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MerchantCategory.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Hold.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MilestoneManager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Tutorial.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DealMemory.h

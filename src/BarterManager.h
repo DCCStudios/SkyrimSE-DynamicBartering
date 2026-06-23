@@ -2,6 +2,7 @@
 #include "PriceCalculator.h"
 #include "CounterOffer.h"
 #include "MerchantCategory.h"
+#include "Hold.h"
 #include "Integration/ChimBridge.h"
 
 struct OfferData {
@@ -152,6 +153,7 @@ private:
     MerchantPersonality cachedPersonality;
     float cachedSpeech = 15.0f;
     MerchantCategory cachedCategory = MerchantCategory::Generalist;
+    Hold cachedHold = Hold::None;  // merchant's home hold (for Thane / civil-war standing)
     // Specialty match for the current offer (single item or value-weighted cart),
     // computed once per offer and read by BuildAcceptanceContext.
     float cachedSpecialtyFactor = 0.0f;

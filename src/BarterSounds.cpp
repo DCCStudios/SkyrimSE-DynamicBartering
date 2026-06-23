@@ -82,7 +82,19 @@ namespace {
         case Event::ReOffer:        return "ReOffer.wav";
         case Event::OfferRejected:  return "OfferRejected.wav";
         case Event::OfferAccepted:  return "OfferAccepted.wav";
+        case Event::IntimidateSuccess: return "IntimidateSuccess.wav";
         default:                    return nullptr;
+        }
+    }
+
+    // Optional graceful fallback when an event has no installed WAV: play this other
+    // event's cue instead of going silent. Keeps the dedicated-sound API forward-
+    // compatible (a custom IntimidateSuccess.wav takes over automatically once supplied)
+    // without regressing the audio for users who haven't added the new file yet.
+    const char* FallbackBaseFor(Event e) {
+        switch (e) {
+        case Event::IntimidateSuccess: return BaseFileFor(Event::OfferAccepted);
+        default:                       return nullptr;
         }
     }
 
@@ -247,16 +259,22 @@ namespace {
 
         std::lock_guard lock(g_mutex);
 
-        const auto& variants = VariantsFor(base);
-        if (variants.empty()) {
-            return;  // no asset installed for this event; silently skip
+        const std::vector<std::string>* variants = &VariantsFor(base);
+        if (variants->empty()) {
+            // No dedicated asset for this event - try its fallback cue before giving up.
+            if (const char* fb = FallbackBaseFor(e)) {
+                variants = &VariantsFor(fb);
+            }
+        }
+        if (variants->empty()) {
+            return;  // no asset installed for this event (or its fallback); silently skip
         }
 
-        std::string chosen = variants.front();
-        if (variants.size() > 1) {
+        std::string chosen = variants->front();
+        if (variants->size() > 1) {
             static std::mt19937 rng{ std::random_device{}() };
-            std::uniform_int_distribution<std::size_t> dist(0, variants.size() - 1);
-            chosen = variants[dist(rng)];
+            std::uniform_int_distribution<std::size_t> dist(0, variants->size() - 1);
+            chosen = (*variants)[dist(rng)];
         }
 
         auto raw = LoadRaw(SoundDir() / chosen);

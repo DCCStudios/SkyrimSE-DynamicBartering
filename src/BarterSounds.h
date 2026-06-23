@@ -19,6 +19,7 @@ namespace BarterSounds {
         ReOffer,
         OfferRejected,
         OfferAccepted,
+        IntimidateSuccess,
     };
 
     // Play the sound for an event (async, volume-scaled, random variant). No-op when

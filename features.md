@@ -373,6 +373,34 @@ This mod stands on the shoulders of the SKSE modding community. Huge thanks to:
 - **Dynamic Pricing Framework (DPF)** and **DynamicPrices-SKSE** — studied for the pure-DLL `UpdateItemCardInfo` Scaleform approach used to reflect relationship pricing in the vanilla item card; the wrapper is written to chain with these mods rather than conflict with them.
 - **UESP** and the Elder Scrolls Fandom wiki — merchant lists used to hand-author the vanilla merchant personalities and specialty categories.
 
+**UI themes (color/styling inspiration)**
+
+The optional UI themes recolor this mod's barter window to echo the look of popular UI
+overhauls. No assets from these mods are bundled — the themes are independent color
+palettes inspired by each overhaul's style, and the in-game font simply follows whichever
+overhaul you have installed (we reference the shared `$Everywhere*` font aliases). Full
+credit and thanks to their authors:
+
+- **Outlander UI II** — rbtRvlt. (pairs with the Quill font)
+- **Oathvein UI** — Nithog. (pairs with Jost)
+- **Edge UI - Modern Skyrim Interface** — EugeneUI. (pairs with Futura Book BT)
+- **NORDIC UI - Interface Overhaul** — outobugi. (pairs with Sovngarde)
+- **SkyUILib - Untarnished UI** — Vorganger (Vor). (pairs with Futura Book BT)
+- **New Horizons UI** — rob18. (pairs with High Voltage)
+- **Dragonborn UI - SkyUI Reskin** — borokoshow. (pairs with Sovngarde)
+- **SkyUI** — the SkyUI Team (the default-theme baseline).
+
+**Fonts (referenced/recommended by the themes)**
+
+These are not redistributed by this mod; install the matching UI overhaul (or the font
+mod) to get them. Thanks to their creators:
+
+- **Quill - Realistic Font Replacer** — Quill.
+- **Jost\*** — indestructible type (Owen Earl), via Google Fonts (SIL OFL).
+- **Futura Book BT** — Bitstream (distributed via DaFont Family); original Futura typeface by Paul Renner.
+- **Sovngarde - A Nordic Font** — mjorka (SIL OFL).
+- **High Voltage** — Levi Szekeres (DaFont, free for personal use).
+
 If you contributed something used here and aren't credited, it's an oversight, not a slight — let me know and I'll add you.
 
 ---
@@ -381,6 +409,10 @@ If you contributed something used here and aren't credited, it's an oversight, n
 MAINTENANCE NOTES (not for the Nexus page):
 - CREDITS: verify exact author handles before publishing to Nexus. Confirmed from local sources:
   SKSE Menu Framework = Thiago099, SkyrimSouls RE = Vermunds, CHIM/HerikaServer = DwemerDynamics.
+  UI-theme authors confirmed from Nexus mod pages: Outlander UI II = rbtRvlt, Oathvein UI = Nithog,
+  Edge UI = EugeneUI, NORDIC UI = outobugi, Untarnished UI = Vorganger (Vor), New Horizons UI = rob18,
+  Dragonborn UI = borokoshow. Font authors: Quill = Quill, Jost = indestructible type (Owen Earl),
+  Futura Book BT = Bitstream (via DaFont Family) / Paul Renner, Sovngarde = mjorka, High Voltage = Levi Szekeres.
   STILL TO CONFIRM: PrismaUI author handle, DynamicPrices-SKSE author, Dynamic Pricing Framework
   (DPF) author — their local copies had no embedded author name. Fill these in before release.
 - Describe only features that are wired and verified in the live build.

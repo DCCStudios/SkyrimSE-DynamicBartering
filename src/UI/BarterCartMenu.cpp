@@ -5,6 +5,7 @@
 #include "BarterManager.h"
 #include "Hooks.h"
 #include "Settings.h"
+#include "Theme.h"
 #include "DebugLog.h"
 
 #include <cmath>
@@ -92,6 +93,28 @@ namespace {
     constexpr std::int32_t kTrimDim     = 0x6B5E2A;  // dim gold (separators)
     constexpr std::int32_t kMeterFill   = 0xE0C864;  // bright gold
     constexpr std::int32_t kMeterTrack  = 0x000000;
+
+    // Parse an "#RRGGBB" palette string into a 0xRRGGBB int for GFx line/fill colors.
+    inline std::int32_t HexToInt(const char* hex, std::int32_t fallback) {
+        if (!hex) return fallback;
+        if (*hex == '#') ++hex;
+        std::int32_t v = 0;
+        int digits = 0;
+        for (; *hex && digits < 6; ++hex, ++digits) {
+            char c = *hex;
+            int d;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            else return fallback;
+            v = (v << 4) | d;
+        }
+        return digits == 6 ? v : fallback;
+    }
+    // Theme-aware versions of the gold trim ints (fall back to the originals).
+    inline std::int32_t ThemeTrim()      { return HexToInt(CurrentTheme().accent,    kTrim); }
+    inline std::int32_t ThemeTrimDim()   { return HexToInt(CurrentTheme().accentDim, kTrimDim); }
+    inline std::int32_t ThemeMeterFill() { return HexToInt(CurrentTheme().accent,    kMeterFill); }
 
     // Cart panel: a tall, narrow column hugging the RIGHT edge of the screen
     // (authored BarterMenu stage is ~1280x720). The vanilla item list sits on the
@@ -222,7 +245,7 @@ namespace {
             // Keyboard key-cap: dark rounded square with gold trim + the letter.
             // Barter key (2) shows "B"; Activate key (5) shows the bound key.
             const std::string label = (glyph == 5) ? GetActivateKeyLabel() : std::string("B");
-            LineStyle(m, art, 1.5, kTrim, 100.0);
+            LineStyle(m, art, 1.5, ThemeTrim(), 100.0);
             BeginFill(m, art, kPanelBg, 95.0);
             // simple square cap (rounded look comes from the small size)
             MoveTo(m, art, 1.0, 1.0);
@@ -231,7 +254,7 @@ namespace {
             LineTo(m, art, 1.0, S - 1.0);
             LineTo(m, art, 1.0, 1.0);
             EndFill(m, art);
-            SetStr(m, (keyField + ".htmlText").c_str(), MakeHtml(EscapeHtml(label), 13, "#F0DCA0", "center"));
+            SetStr(m, (keyField + ".htmlText").c_str(), MakeHtml(EscapeHtml(label), 13, CurrentTheme().accentLight, "center"));
             SetBool(m, (keyField + "._visible").c_str(), true);
             return;
         }
@@ -275,8 +298,8 @@ namespace {
         const char* f = "_root.DBCart.frame";
         const double W = kPanelW, H = kPanelH;
 
-        // Thin continuous gold border around the whole panel.
-        LineStyle(m, f, 1.25, kTrim, 100.0);
+        // Thin continuous accent border around the whole panel (themed).
+        LineStyle(m, f, 1.25, ThemeTrim(), 100.0);
         MoveTo(m, f, 0.0, 0.0);
         LineTo(m, f, W, 0.0);
         LineTo(m, f, W, H);
@@ -284,7 +307,7 @@ namespace {
         LineTo(m, f, 0.0, 0.0);
 
         // Section separators
-        LineStyle(m, f, 1.0, kTrimDim, 90.0);
+        LineStyle(m, f, 1.0, ThemeTrimDim(), 90.0);
         MoveTo(m, f, kPad, kSep1Y);     LineTo(m, f, W - kPad, kSep1Y);
         MoveTo(m, f, kPad, kSep2Y);     LineTo(m, f, W - kPad, kSep2Y);
     }
@@ -332,13 +355,13 @@ void BarterCartMenu::Build(RE::GFxMovieView* m) {
 
     CreateText(m, "_root.DBPrompt", "labelField", 2.0, kPromptKeyW + 5.0, 0.0, 90.0, kPromptH);
     StyleText(m, "_root.DBPrompt.labelField", false, false, 0, false, 0);
-    SetStr(m, "_root.DBPrompt.labelField.htmlText", MakeHtml("Barter", 13, "#E6D796"));
+    SetStr(m, "_root.DBPrompt.labelField.htmlText", MakeHtml("Barter", 13, CurrentTheme().accent));
 
     CreateText(m, "_root.DBPrompt", "meterTrack", 3.0, 0.0, kPromptH + 3.0, kMeterW, 4.0);
     StyleText(m, "_root.DBPrompt.meterTrack", false, true, kMeterTrack, true, kTrim);
 
     CreateText(m, "_root.DBPrompt", "meterFill", 4.0, 1.0, kPromptH + 4.0, kMeterW - 2.0, 2.0);
-    StyleText(m, "_root.DBPrompt.meterFill", false, true, kMeterFill, false, 0);
+    StyleText(m, "_root.DBPrompt.meterFill", false, true, ThemeMeterFill(), false, 0);
 
     SetBool(m, "_root.DBPrompt._visible", false);
     SetBool(m, "_root.DBPrompt.meterTrack._visible", false);
@@ -370,7 +393,7 @@ void BarterCartMenu::Build(RE::GFxMovieView* m) {
     // Header / totals / hint (fixed) and the item list (flows down).
     CreateText(m, "_root.DBCart", "header", 3.0, kPad, kHeaderY, kPanelW - kPad * 2.0, 24.0);
     StyleText(m, "_root.DBCart.header", false, false, 0, false, 0);
-    SetStr(m, "_root.DBCart.header.htmlText", MakeHtml("BARTER CART", 15, "#E0C864", "left"));
+    SetStr(m, "_root.DBCart.header.htmlText", MakeHtml("BARTER CART", 15, CurrentTheme().accent, "left"));
 
     CreateText(m, "_root.DBCart", "totals", 4.0, kPad, kTotalsY, kPanelW - kPad * 2.0, 26.0);
     StyleText(m, "_root.DBCart.totals", false, false, 0, false, 0);
@@ -393,7 +416,7 @@ void BarterCartMenu::Build(RE::GFxMovieView* m) {
                kPanelW - kPad * 2.0 - kHintGlyphW - 4.0, 22.0);
     StyleText(m, "_root.DBCart.hint", true, false, 0, false, 0);
     SetStr(m, "_root.DBCart.hint.htmlText",
-        MakeHtml("Hold to open the offer.", 11, "#8C7B3C", "left"));
+        MakeHtml("Hold to open the offer.", 11, CurrentTheme().accentDim, "left"));
 
     CreateText(m, "_root.DBCart", "items", 7.0, kPad, kItemsY,
                kPanelW - kPad * 2.0, kPanelH - kItemsY - kPad);
@@ -544,20 +567,23 @@ void BarterCartMenu::UpdateCartPanel(RE::GFxMovieView* m) {
     lastNet = net;
     lastRelMilli = relMilli;
 
+    const ThemePalette& th = CurrentTheme();
+
     // Header: title + item count.
     std::string header =
-        "<font color=\"#E0C864\" size=\"15\"><b>BARTER CART</b></font>"
-        "<font color=\"#808080\" size=\"12\">  (" + std::to_string(cartCount) + ")</font>";
-    SetStr(m, "_root.DBCart.header.htmlText", MakeHtml(header, 15, "#E0C864", "left"));
+        "<font color=\"" + std::string(th.accent) + "\" size=\"15\"><b>BARTER CART</b></font>"
+        "<font color=\"" + std::string(th.textMuted) + "\" size=\"12\">  (" + std::to_string(cartCount) + ")</font>";
+    SetStr(m, "_root.DBCart.header.htmlText", MakeHtml(header, 15, th.accent, "left"));
 
     // Totals: net is positive when the player pays (net buy), negative when the
     // player receives gold (net sell). Sell items contribute +gold to the player.
+    // "You Receive" stays a fixed functional green; "You Pay"/"Even" follow the theme.
     std::string netLabel;
     const char* netCol;
-    if (cartCount == 0) { netLabel = "Cart is empty"; netCol = "#8C8060"; }
-    else if (net > 0)   { netLabel = "You Pay: " + std::to_string(net) + " Gold"; netCol = "#E0B070"; }
+    if (cartCount == 0) { netLabel = "Cart is empty"; netCol = th.textMuted; }
+    else if (net > 0)   { netLabel = "You Pay: " + std::to_string(net) + " Gold"; netCol = th.accent; }
     else if (net < 0)   { netLabel = "You Receive: " + std::to_string(-net) + " Gold"; netCol = "#9ACD6A"; }
-    else                { netLabel = "Even Trade"; netCol = "#C8B464"; }
+    else                { netLabel = "Even Trade"; netCol = th.accent; }
     SetStr(m, "_root.DBCart.totals.htmlText",
         MakeHtml("<b>" + netLabel + "</b>", 14, netCol, "left"));
 
@@ -568,7 +594,7 @@ void BarterCartMenu::UpdateCartPanel(RE::GFxMovieView* m) {
         const char* relCol;
         if (!hasMerchant || !settings->relationshipPricing || discPct == 0) {
             relText = "Standing: market prices";
-            relCol = "#A0987C";
+            relCol = th.textMuted;
         } else if (discPct > 0) {
             relText = "Standing: " + std::to_string(discPct) + "% buy discount";
             relCol = "#9ACD6A";
@@ -582,7 +608,7 @@ void BarterCartMenu::UpdateCartPanel(RE::GFxMovieView* m) {
     // Hint adapts to whether anything is staged yet.
     SetStr(m, "_root.DBCart.hint.htmlText",
         MakeHtml(cartCount == 0 ? "Add items, then hold to open." : "Hold to open the offer.",
-                 11, "#8C7B3C", "left"));
+                 11, th.accentDim, "left"));
 
     // Items: one per line. Buying = gold leaving the player (shown -), selling =
     // gold coming to the player (shown +). A bullet + a faint separator per row.
@@ -615,15 +641,16 @@ void BarterCartMenu::UpdateCartPanel(RE::GFxMovieView* m) {
         const int line = static_cast<int>(std::lround(e.count * e.marketUnitPrice * lineMult));
         std::string name = EscapeHtml(e.name);
         if (e.count > 1) name += "  x" + std::to_string(e.count);
-        const char* col = e.isBuying ? "#E0B070" : "#9ACD6A";
+        // Buy price uses the theme accent; sell price stays a fixed functional green.
+        const char* col = e.isBuying ? th.accent : "#9ACD6A";
         const char* sign = e.isBuying ? "-" : "+";
         inner +=
-            "<font color=\"#C8B464\" size=\"" + bs + "\">\xE2\x80\xA2 </font>"  // bullet
-            "<font color=\"#DCDCDC\" size=\"" + fs + "\">" + name + "</font>"
+            "<font color=\"" + std::string(th.accent) + "\" size=\"" + bs + "\">\xE2\x80\xA2 </font>"  // bullet
+            "<font color=\"" + std::string(th.textSecondary) + "\" size=\"" + fs + "\">" + name + "</font>"
             "  <font color=\"" + std::string(col) + "\" size=\"" + fs + "\"><b>" + sign +
             std::to_string(line) + "</b></font>"
             "<br/><font color=\"#3A3526\" size=\"" + ss + "\"> </font><br/>";   // thin spacer row
     }
 
-    SetStr(m, "_root.DBCart.items.htmlText", MakeHtml(inner, itemFont, "#DCDCDC", "left"));
+    SetStr(m, "_root.DBCart.items.htmlText", MakeHtml(inner, itemFont, th.textSecondary, "left"));
 }
